@@ -65,7 +65,8 @@ class DeviceLogger:
 
     def __init__(self, device_id: str, out_dir: Path, session: str, t0: float,
                  stop: asyncio.Event, battery_interval: float = 300.0,
-                 client_factory=None, no_data_warn: float = 15.0):
+                 client_factory=None, no_data_warn: float = 15.0,
+                 stale_reconnect: float = 60.0):
         self.device_id = device_id
         self.label = device_id.split("@")[0]   # 寫進 CSV 的裝置名稱（去掉模擬參數）
         self.session = session
@@ -73,6 +74,7 @@ class DeviceLogger:
         self.stop = stop
         self.battery_interval = battery_interval
         self.no_data_warn = no_data_warn
+        self.stale_reconnect = stale_reconnect
         self.is_sim = device_id.startswith("sim:")
         if self.is_sim:
             from sim_polar import SimClient
@@ -185,6 +187,9 @@ class DeviceLogger:
                     warned_no_data = True
                 elif silent < self.no_data_warn:
                     warned_no_data = False
+                if self.stale_reconnect and silent >= self.stale_reconnect:
+                    # 看門狗：Windows 有時不會回報斷線，連線會卡在「已連線但永遠沒資料」
+                    raise BleakError(f"連線 {silent:.0f} 秒沒有資料，強制重連")
                 if time.time() >= next_batt and client.is_connected:
                     await self._read_battery(client)
                     next_batt = time.time() + self.battery_interval
@@ -282,7 +287,7 @@ async def main_async(args, client_factory=None) -> int:
             loop.add_signal_handler(sig, _request_stop)
 
     loggers = [DeviceLogger(d, out_dir, session, t0, stop, args.battery_interval, client_factory,
-                            args.no_data_warn)
+                            args.no_data_warn, args.stale_reconnect)
                for d in args.devices]
     log.info("session %s，裝置 %s，輸出 %s", session, args.devices, out_dir)
 
@@ -351,6 +356,8 @@ def parse_args(argv=None):
     p.add_argument("--battery-interval", type=float, default=300, help="讀電量間隔秒數")
     p.add_argument("--status-interval", type=float, default=60, help="印狀態行間隔秒數")
     p.add_argument("--no-data-warn", type=float, default=15, help="連線後幾秒沒收到心率就警告")
+    p.add_argument("--stale-reconnect", type=float, default=60,
+                   help="連線後幾秒沒收到心率就強制斷線重連（0 = 不做）")
     p.add_argument("-v", "--verbose", action="store_true")
     return p.parse_args(argv)
 
