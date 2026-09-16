@@ -44,3 +44,29 @@
   以獨立排程工作啟動長跑：23:15 起 `--duration 14400`（4 小時，約 03:15 結束），log 在 `data/longrun_20260916_231518.log`。
 - 也驗證了 Windows 上 Ctrl-Break / Ctrl-C 能優雅收尾並產生合併表（`scripts/test_ctrl_break.py`，需在真實主控台執行）。
 
+## 23:15–03:15 真機 4 小時長跑（排程工作，log `data/longrun_20260916_231518.log`）
+- 連線 259 次、斷線 258 次、掃不到 0 次、**總筆數 0**。
+- 每次連線存活：中位 19 s，最短 16 s，最長 35 s，沒有任何一次撐過 60 s。
+- 電量從頭到尾 100%。程式本身穩定：4 小時無例外、無卡死，自動重連與退避運作正常，結束時正常收尾並產生（空的）合併表。
+- 05:12 再用 `scripts/connect_test.py` 測一次：仍是連線後 18 秒斷、零通知。
+
+## 總結（05:15 寫）
+
+### 完成的
+1. `polar_hr_logger.py`：同時連 N 顆 Polar Verity Sense，標準 Heart Rate 服務，每顆一個 CSV（毫秒時間、HR、RR、接觸旗標、電量），
+   結束自動產生每秒一列的合併寬表。自動重連（指數退避）、掃不到持續重試、無資料看門狗、Ctrl-C/Ctrl-Break 優雅收尾。
+2. `sim_polar.py` 模擬裝置 + 10 個 pytest：4 顆同時、裝置端斷線、連線失敗、合併表，全部驗證通過。
+3. `merge_hr.py`、`scripts/analyze_log.py`、`scripts/run_longrun.cmd`（排程工作無人值守）、README。
+4. 對真機 0C2D7633 的連線流程本身已驗證可行（前置測試在電量 87–89% 時收到每秒心率通知）。
+
+### 沒做到的
+- **沒有錄到任何真實心率。** 手環放在充電座上充飽後，韌體接受連線後約 12 秒就切斷鏈路（Windows 於 19 秒回報），
+  4 小時 259 次連線全部如此。這是裝置端行為，五組軟體實驗（不訂閱 / 訂閱 / 輪詢 / 配對 / PMD / 關快取 / MAC 直連 / 持續掃描 / Service Changed）都無效。
+- 4 顆真機同時連線只用模擬驗證，未實測。
+
+### 早上請你做（大約 10 分鐘）
+1. 把 0C2D7633 從充電座拿下來，按一下按鈕開機，戴在手臂上。
+2. `uv run python scripts/connect_test.py 0C2D7633 30` → 應該看到每秒一行 `HR=xx`。若仍 0 筆並 19 秒斷線，請告訴我，那就不是充電座的問題。
+3. 其他 3 顆同樣開機戴上，`uv run python scripts/scan.py 10` 確認 4 顆都掃得到。
+4. `uv run python polar_hr_logger.py --duration 300 <四個ID>` 跑 5 分鐘，看狀態行 4 顆都有 HR 與筆數。
+5. 檢查 `data/merged_<session>.csv`。
