@@ -57,6 +57,7 @@ def _write_csv(path: Path, rows):
         w = csv.DictWriter(f, fieldnames=phl.CSV_FIELDS)
         w.writeheader()
         for r in rows:
+            r.setdefault("label", r.get("device", ""))
             w.writerow({k: r.get(k, "") for k in phl.CSV_FIELDS})
 
 
@@ -107,3 +108,21 @@ def test_end_to_end_four_sim_devices(tmp_path):
     assert len(merged) == 1
     header = open(merged[0], encoding="utf-8").readline().strip().split(",")
     assert header == ["time", "hr_sim:A", "hr_sim:B", "hr_sim:C", "hr_sim:D"]
+
+
+def test_load_labels(tmp_path):
+    p = tmp_path / "devices.json"
+    p.write_text('{"0c2d7633": "1P", "0C2DC632": "2P"}', encoding="utf-8")
+    assert phl.load_labels(p) == {"0C2D7633": "1P", "0C2DC632": "2P"}
+    assert phl.load_labels(tmp_path / "missing.json") == {}
+
+
+def test_label_used_in_filename_and_csv(tmp_path):
+    import asyncio as aio
+    stop = aio.Event()
+    lg = phl.DeviceLogger("sim:X", tmp_path, "s1", 0.0, stop, label="7P")
+    assert lg.path.name == "hr_7P_s1.csv"
+    lg._on_hr(None, bytearray(encode_hr(66, [900.0])))
+    lg._fh.close()
+    rows = list(csv.DictReader(open(lg.path, encoding="utf-8")))
+    assert rows[0]["device"] == "sim:X" and rows[0]["label"] == "7P" and rows[0]["hr_bpm"] == "66"

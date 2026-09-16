@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import csv
+import json
 import logging
 import re
 import signal
@@ -27,7 +28,18 @@ from bleak.exc import BleakError
 HR_UUID = "00002a37-0000-1000-8000-00805f9b34fb"
 BATT_UUID = "00002a19-0000-1000-8000-00805f9b34fb"
 
-CSV_FIELDS = ["pc_time", "elapsed_s", "device", "hr_bpm", "rr_ms", "contact", "battery"]
+CSV_FIELDS = ["pc_time", "elapsed_s", "device", "label", "hr_bpm", "rr_ms", "contact", "battery"]
+DEVICES_FILE = Path(__file__).with_name("devices.json")
+
+
+def load_labels(path: Path = DEVICES_FILE) -> dict[str, str]:
+    """讀 devices.json：{"0C2D7633": "1P", ...}。沒有檔案就回空表。"""
+    try:
+        with open(path, encoding="utf-8") as f:
+            return {str(k).upper(): str(v) for k, v in json.load(f).items()}
+    except FileNotFoundError:
+        return {}
+
 
 log = logging.getLogger("polar")
 
@@ -66,9 +78,11 @@ class DeviceLogger:
     def __init__(self, device_id: str, out_dir: Path, session: str, t0: float,
                  stop: asyncio.Event, battery_interval: float = 300.0,
                  client_factory=None, no_data_warn: float = 15.0,
-                 stale_reconnect: float = 60.0):
+                 stale_reconnect: float = 60.0, label: str | None = None):
         self.device_id = device_id
-        self.label = device_id.split("@")[0]   # 寫進 CSV 的裝置名稱（去掉模擬參數）
+        self.raw_id = device_id.split("@")[0]        # 去掉模擬參數的裝置 ID
+        self.label = label or self.raw_id            # 顯示名稱：1P、2P…，沒對照到就是 ID
+        self.tag = self.label if self.label == self.raw_id else f"{self.label} {self.raw_id}"
         self.session = session
         self.t0 = t0
         self.stop = stop
@@ -81,8 +95,8 @@ class DeviceLogger:
             self.client_factory = SimClient
         else:
             self.client_factory = client_factory or BleakClient
-        safe_id = re.sub(r"[^A-Za-z0-9_-]+", "_", device_id.split("@")[0])
-        self.path = out_dir / f"hr_{safe_id}_{session}.csv"
+        safe = re.sub(r"[^A-Za-z0-9_-]+", "_", self.label)
+        self.path = out_dir / f"hr_{safe}_{session}.csv"
         self._fh = open(self.path, "a", newline="", encoding="utf-8")
         self._w = csv.DictWriter(self._fh, fieldnames=CSV_FIELDS)
         if self._fh.tell() == 0:
@@ -106,7 +120,7 @@ class DeviceLogger:
             hr, rr, contact = parse_hr(bytes(data))
         except Exception as e:  # 不讓壞封包弄掛整個 task
             self.n_parse_errors += 1
-            log.warning("[%s] 解析失敗 %s: %s", self.device_id, bytes(data).hex(), e)
+            log.warning("[%s] 解析失敗 %s: %s", self.tag, bytes(data).hex(), e)
             return
         if self.last_sample is not None:
             self._gap_times.append(now - self.last_sample)
@@ -116,7 +130,8 @@ class DeviceLogger:
         self._w.writerow({
             "pc_time": datetime.fromtimestamp(now).isoformat(timespec="milliseconds"),
             "elapsed_s": f"{now - self.t0:.3f}",
-            "device": self.label,
+            "device": self.raw_id,
+            "label": self.label,
             "hr_bpm": hr,
             "rr_ms": ";".join(f"{x:.1f}" for x in rr),
             "contact": contact,
@@ -143,7 +158,7 @@ class DeviceLogger:
                         self.n_disconnects += 1
                     if time.time() - t_start > 60:
                         backoff = 1.0   # 這次連線有撐過 1 分鐘，視為正常，重置退避
-                    log.warning("[%s] %s（%.0f 秒後重試）", self.device_id, e, backoff)
+                    log.warning("[%s] %s（%.0f 秒後重試）", self.tag, e, backoff)
                 if self.stop.is_set():
                     break
                 await _sleep_or_stop(backoff, self.stop)
@@ -166,12 +181,12 @@ class DeviceLogger:
 
     async def _session_once(self) -> None:
         dev = await self._find()
-        log.info("[%s] 找到 %s @ %s，連線中", self.device_id, dev.name, dev.address)
+        log.info("[%s] 找到 %s @ %s，連線中", self.tag, dev.name, dev.address)
         self._disconnected.clear()
         async with self.client_factory(dev, timeout=20.0,
                                        disconnected_callback=self._on_disconnect) as client:
             self.n_connects += 1
-            log.info("[%s] 已連線（第 %d 次）", self.device_id, self.n_connects)
+            log.info("[%s] 已連線（第 %d 次）", self.tag, self.n_connects)
             await self._read_battery(client)
             await client.start_notify(HR_UUID, self._on_hr)
             next_batt = time.time() + self.battery_interval
@@ -183,7 +198,7 @@ class DeviceLogger:
                 silent = time.time() - (last or t_sub)
                 if silent >= self.no_data_warn and not warned_no_data:
                     log.warning("[%s] 已連線但 %.0f 秒沒有心率通知（手環是否開機、貼在皮膚上？）",
-                                self.device_id, silent)
+                                self.tag, silent)
                     warned_no_data = True
                 elif silent < self.no_data_warn:
                     warned_no_data = False
@@ -205,9 +220,9 @@ class DeviceLogger:
         try:
             b = await client.read_gatt_char(BATT_UUID)
             self.battery = int(b[0])
-            log.info("[%s] 電量 %d%%", self.device_id, self.battery)
+            log.info("[%s] 電量 %d%%", self.tag, self.battery)
         except Exception as e:
-            log.warning("[%s] 讀電量失敗：%s", self.device_id, e)
+            log.warning("[%s] 讀電量失敗：%s", self.tag, e)
 
     # ---- 統計
     def gap_stats(self) -> dict:
@@ -250,7 +265,7 @@ def merge_csvs(paths: list[Path], out: Path) -> int:
         df = pd.read_csv(p)
         if df.empty:
             continue
-        dev = str(df["device"].iloc[0])
+        dev = str(df["label"].iloc[0]) if "label" in df.columns else str(df["device"].iloc[0])
         t = pd.to_datetime(df["pc_time"]).dt.floor("1s")
         s = pd.Series(df["hr_bpm"].to_numpy(dtype=float), index=t).replace(0, float("nan"))
         s = s.groupby(level=0).mean().rename(f"hr_{dev}")
@@ -275,8 +290,10 @@ async def discover_polar(seconds: float) -> list[str]:
             found[name.split()[-1]] = adv.rssi
     async with BleakScanner(cb):
         await asyncio.sleep(seconds)
+    labels = load_labels()
     for dev_id, rssi in sorted(found.items()):
-        log.info("掃到 Polar %s（RSSI %d）", dev_id, rssi)
+        log.info("掃到 Polar %s%s（RSSI %d）", dev_id,
+                 f" = {labels[dev_id]}" if dev_id in labels else "（未對照）", rssi)
     return sorted(found)
 
 
@@ -306,9 +323,13 @@ async def main_async(args, client_factory=None) -> int:
         for sig in (signal.SIGINT, signal.SIGTERM):
             loop.add_signal_handler(sig, _request_stop)
 
+    labels = load_labels()
     loggers = [DeviceLogger(d, out_dir, session, t0, stop, args.battery_interval, client_factory,
-                            args.no_data_warn, args.stale_reconnect)
+                            args.no_data_warn, args.stale_reconnect,
+                            labels.get(d.split("@")[0].upper()))
                for d in args.devices]
+    if labels:
+        log.info("對照表：%s", ", ".join(f"{v}={k}" for k, v in sorted(labels.items(), key=lambda kv: kv[1])))
     log.info("session %s，裝置 %s，輸出 %s", session, args.devices, out_dir)
 
     # 逐一啟動（間隔 stagger 秒），避免 Windows 同時發起多條 BLE 連線
@@ -326,7 +347,7 @@ async def main_async(args, client_factory=None) -> int:
             parts = []
             for lg in loggers:
                 age = "-" if lg.last_sample is None else f"{time.time() - lg.last_sample:.0f}s前"
-                parts.append(f"{lg.device_id}: HR={lg.last_hr} n={lg.n_samples} "
+                parts.append(f"{lg.label}: HR={lg.last_hr} n={lg.n_samples} "
                              f"最近{age} 斷線{lg.n_disconnects} 電{lg.battery}%")
             log.info("狀態 %.0f 分 | %s", (time.time() - t0) / 60, " | ".join(parts))
 
@@ -356,7 +377,7 @@ async def main_async(args, client_factory=None) -> int:
         gtxt = "" if not gs else (f"間隔 p50={gs['p50']:.2f}s p99={gs['p99']:.2f}s "
                                   f"max={gs['max']:.1f}s >3s 有 {gs['gaps_over_3s']} 次")
         log.info("[%s] 筆數 %d，連線 %d 次，斷線 %d 次，電量 %s%%。%s → %s",
-                 lg.device_id, lg.n_samples, lg.n_connects, lg.n_disconnects,
+                 lg.tag, lg.n_samples, lg.n_connects, lg.n_disconnects,
                  lg.battery, gtxt, lg.path.name)
     merged = out_dir / f"merged_{session}.csv"
     try:
