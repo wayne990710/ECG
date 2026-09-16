@@ -28,3 +28,10 @@
 - README 完整改寫（早上實測步驟、CSV 欄位、已知問題）。
 - 22:59 起真機背景長跑（`--duration 16200`，4.5 小時，log 在 `data/longrun_*.log`）。前 5 分鐘：連線 9 次、每次存活 18–19 s、零筆資料、電量 100%。
 
+## 23:05–23:10 最後一個實驗 + 長跑重啟
+- `scripts/experiment_svcchanged.py`：想明確訂閱 Service Changed (0x2A05) 指示（bleak 每次斷線前都警告
+  「unhandled services changed event」），但 Windows 回 Access Denied（CCCD 由系統持有），仍在 22 s 斷線。結論不變。
+- 22:59 的長跑改以 PowerShell `Start-Process` 獨立程序重啟（23:06，`--duration 15000`，約 4.2 小時，
+  log 在 `data/longrun_20260916_230626.log.err`，因 logging 走 stderr）。前 5 分鐘紀錄見上一段：每次連線 18–19 s 斷、零資料。
+- 監看器：長跑一旦收到非零 HR、程式出錯、或 log 停止更新 3 分鐘，就會通知我。
+
