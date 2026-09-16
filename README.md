@@ -67,6 +67,20 @@ uv run python merge_hr.py --session 20260917_080000
 - 掃描不到裝置也會持續重試（不用重啟程式）。
 - 各顆逐一啟動（預設間隔 2 秒），避免 Windows 同時發起多條 BLE 連線。
 - 每 5 分鐘讀一次電量。
+- 已連線但 15 秒沒收到心率會警告；60 秒沒收到就強制斷線重連（`--stale-reconnect`，Windows 有時不回報斷線）。
+- Ctrl-C / Ctrl-Break 都會優雅收尾。
+
+### 無人值守的長時間收錄
+
+要讓程式獨立於終端機、關掉視窗也繼續跑，可用排程工作啟動：
+
+```bash
+schtasks /create /tn ECG_longrun /tr "\"%CD%\scriptsun_longrun.cmd\" 14400 0C2D7633 AAAAAAAA" /sc once /st 23:59 /f
+schtasks /run /tn ECG_longrun
+```
+
+第一個參數是秒數（14400 = 4 小時），後面接裝置 ID。log 會寫到 `data/longrun_<時間>.log`，
+用 `uv run python scripts/analyze_log.py data/longrun_*.log` 看摘要。
 
 ### 沒有真機時的模擬
 
