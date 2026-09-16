@@ -35,3 +35,12 @@
   log 在 `data/longrun_20260916_230626.log.err`，因 logging 走 stderr）。前 5 分鐘紀錄見上一段：每次連線 18–19 s 斷、零資料。
 - 監看器：長跑一旦收到非零 HR、程式出錯、或 log 停止更新 3 分鐘，就會通知我。
 
+## 23:10–23:16 長跑被誤殺、加看門狗、改用排程工作
+- 23:06 啟動的長跑在 23:10:50 無聲死亡（無 traceback），時間點正好是我停掉一個卡住的測試工作。
+  教訓：長跑不能和互動工作階段共用程序樹。
+- 死前那次連線是「已連線、無資料、也沒收到斷線事件」，程式會永遠卡在那裡 → 新增看門狗
+  `--stale-reconnect`（預設 60 s 無資料就強制斷線重連）。
+- `scripts/run_longrun.cmd`（純 ASCII，cmd 代碼頁不吃 UTF-8 註解）+ `schtasks /create /tn ECG_longrun`
+  以獨立排程工作啟動長跑：23:15 起 `--duration 14400`（4 小時，約 03:15 結束），log 在 `data/longrun_20260916_231518.log`。
+- 也驗證了 Windows 上 Ctrl-Break / Ctrl-C 能優雅收尾並產生合併表（`scripts/test_ctrl_break.py`，需在真實主控台執行）。
+
