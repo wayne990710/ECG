@@ -45,7 +45,7 @@ def analyze(path):
             continue
         dev, rest = m.groups()
         d = per[dev]
-        if rest.startswith("已連線"):
+        if rest.startswith("已連線（"):
             d["connect"].append(t)
         elif "裝置斷線" in rest or "連線失活" in rest:
             d["disconnect"].append(t)
