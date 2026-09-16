@@ -65,13 +65,14 @@ class DeviceLogger:
 
     def __init__(self, device_id: str, out_dir: Path, session: str, t0: float,
                  stop: asyncio.Event, battery_interval: float = 300.0,
-                 client_factory=None):
+                 client_factory=None, no_data_warn: float = 15.0):
         self.device_id = device_id
         self.label = device_id.split("@")[0]   # 寫進 CSV 的裝置名稱（去掉模擬參數）
         self.session = session
         self.t0 = t0
         self.stop = stop
         self.battery_interval = battery_interval
+        self.no_data_warn = no_data_warn
         self.is_sim = device_id.startswith("sim:")
         if self.is_sim:
             from sim_polar import SimClient
@@ -172,8 +173,18 @@ class DeviceLogger:
             await self._read_battery(client)
             await client.start_notify(HR_UUID, self._on_hr)
             next_batt = time.time() + self.battery_interval
+            t_sub = time.time()
+            warned_no_data = False
             while not self.stop.is_set() and not self._disconnected.is_set():
                 await _wait_any([self.stop, self._disconnected], timeout=1.0)
+                last = self.last_sample if (self.last_sample or 0) >= t_sub else None
+                silent = time.time() - (last or t_sub)
+                if silent >= self.no_data_warn and not warned_no_data:
+                    log.warning("[%s] 已連線但 %.0f 秒沒有心率通知（手環是否開機、貼在皮膚上？）",
+                                self.device_id, silent)
+                    warned_no_data = True
+                elif silent < self.no_data_warn:
+                    warned_no_data = False
                 if time.time() >= next_batt and client.is_connected:
                     await self._read_battery(client)
                     next_batt = time.time() + self.battery_interval
@@ -265,11 +276,13 @@ async def main_async(args, client_factory=None) -> int:
 
     if sys.platform == "win32":
         signal.signal(signal.SIGINT, _request_stop)
+        signal.signal(signal.SIGBREAK, _request_stop)
     else:
         for sig in (signal.SIGINT, signal.SIGTERM):
             loop.add_signal_handler(sig, _request_stop)
 
-    loggers = [DeviceLogger(d, out_dir, session, t0, stop, args.battery_interval, client_factory)
+    loggers = [DeviceLogger(d, out_dir, session, t0, stop, args.battery_interval, client_factory,
+                            args.no_data_warn)
                for d in args.devices]
     log.info("session %s，裝置 %s，輸出 %s", session, args.devices, out_dir)
 
@@ -337,6 +350,7 @@ def parse_args(argv=None):
     p.add_argument("--stagger", type=float, default=2.0, help="各裝置啟動間隔秒數")
     p.add_argument("--battery-interval", type=float, default=300, help="讀電量間隔秒數")
     p.add_argument("--status-interval", type=float, default=60, help="印狀態行間隔秒數")
+    p.add_argument("--no-data-warn", type=float, default=15, help="連線後幾秒沒收到心率就警告")
     p.add_argument("-v", "--verbose", action="store_true")
     return p.parse_args(argv)
 
