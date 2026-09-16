@@ -75,7 +75,7 @@ uv run python merge_hr.py --session 20260917_080000
 要讓程式獨立於終端機、關掉視窗也繼續跑，可用排程工作啟動：
 
 ```bash
-schtasks /create /tn ECG_longrun /tr "\"%CD%\scriptsun_longrun.cmd\" 14400 0C2D7633 AAAAAAAA" /sc once /st 23:59 /f
+schtasks /create /tn ECG_longrun /tr "\"%CD%\scripts\run_longrun.cmd\" 14400 0C2D7633 AAAAAAAA" /sc once /st 23:59 /f
 schtasks /run /tn ECG_longrun
 ```
 
