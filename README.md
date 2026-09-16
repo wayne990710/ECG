@@ -100,6 +100,10 @@ uv run pytest
 
 ### 已知問題
 
+- **韌體 3.0.16 的 Verity Sense 在 Windows 上無法穩定串流**（連上後約 19 秒被裝置切斷、收不到心率；
+  韌體 2.2.6 的手環完全正常）。這是 Polar 的已知問題：
+  [polar-ble-sdk#827](https://github.com/polarofficial/polar-ble-sdk/issues/827)，iOS 不受影響。
+  用 `uv run python scripts/device_info.py <ID>` 可查每顆的軟體版本。**其餘手環請勿透過 Polar Flow 更新韌體。**
 - **手環放在充電座上且充飽（100%）時**，會接受連線但約 12 秒後主動切斷無線鏈路，收不到任何心率通知。
   這是裝置韌體行為，軟體端無解。請把手環從充電座拿下來、按按鈕開機再錄。詳見 `LOG.md`。
 - 手環沒貼皮膚時 `hr_bpm` 會是 0，這是正常的。

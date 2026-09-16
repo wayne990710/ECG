@@ -81,3 +81,11 @@
 - 05:35 使用者把 0C2D7633 重開機、確認心率模式（藍燈）後再測：仍 0 筆、19 s 斷線。
 - `scripts/device_info.py` 讀 Device Information Service：**0C2D7633 軟體 3.0.16，其他 3 顆 2.2.6**（韌體 0.1.5、硬體 00784292.02 相同）。
   3.0.16 少了 `fb005c20` 服務；HR 封包 flags 0x06 vs 0x00 的差異也來自此。→ 問題是新韌體的行為。
+- 再試 Windows 配對加密等級 2 / 3（`client.pair(protection_level=…)`）：無效，仍 22 s 斷線。
+- **查到根因**：Polar 官方 SDK repo 的 issue
+  [polarofficial/polar-ble-sdk#827](https://github.com/polarofficial/polar-ble-sdk/issues/827)
+  「Verity Sense BLE stream freezes on Windows after firmware update」——韌體 3.0.16、Windows 11，
+  第三方 Windows 應用（TPVirtual、MyWhoosh）連上後幾秒凍結、掉 0、反覆重連；iOS 正常；重開機、重新配對都沒用。
+  與我們看到的一模一樣，且我們的 3 顆 2.2.6 全部正常。issue 仍 open，Polar 尚無回應，官方
+  [3.0.16 更新說明](https://support.polar.com/en/updates/polar-verity-sense-3016-firmware-update) 沒提降版。
+- 結論：0C2D7633 在 Windows 上目前無法用；不是程式問題。建議：其餘 3 顆**不要**用 Polar Flow 更新韌體。
