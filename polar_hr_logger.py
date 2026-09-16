@@ -266,7 +266,27 @@ def merge_csvs(paths: list[Path], out: Path) -> int:
 
 # ---------------------------------------------------------------- 主程式
 
+async def discover_polar(seconds: float) -> list[str]:
+    """掃描 seconds 秒，回傳所有 Polar Sense 的裝置 ID（名稱尾碼）。"""
+    found: dict[str, int] = {}
+    def cb(d, adv):
+        name = d.name or adv.local_name or ""
+        if name.startswith("Polar"):
+            found[name.split()[-1]] = adv.rssi
+    async with BleakScanner(cb):
+        await asyncio.sleep(seconds)
+    for dev_id, rssi in sorted(found.items()):
+        log.info("掃到 Polar %s（RSSI %d）", dev_id, rssi)
+    return sorted(found)
+
+
 async def main_async(args, client_factory=None) -> int:
+    if args.auto:
+        log.info("自動掃描 %.0f 秒…", args.scan_time)
+        args.devices = list(dict.fromkeys(args.devices + await discover_polar(args.scan_time)))
+    if not args.devices:
+        log.error("沒有任何裝置。請確認手環已開機（藍燈）並在附近，或直接給裝置 ID。")
+        return 2
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
     session = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -349,7 +369,9 @@ async def main_async(args, client_factory=None) -> int:
 
 def parse_args(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("devices", nargs="+", help="裝置 ID（名稱尾碼，如 0C2D7633）")
+    p.add_argument("devices", nargs="*", help="裝置 ID（名稱尾碼，如 0C2D7633）；不給就要加 --auto")
+    p.add_argument("--auto", action="store_true", help="自動掃描 10 秒，連線所有掃到的 Polar Sense")
+    p.add_argument("--scan-time", type=float, default=10.0, help="--auto 的掃描秒數")
     p.add_argument("--out", default="data", help="輸出資料夾（預設 data）")
     p.add_argument("--duration", type=float, default=0, help="錄多久（秒），0 = 直到 Ctrl-C")
     p.add_argument("--stagger", type=float, default=2.0, help="各裝置啟動間隔秒數")

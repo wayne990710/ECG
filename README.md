@@ -13,6 +13,17 @@ uv sync
 
 ## 一、同時收錄 4 顆 Polar Verity Sense
 
+### 不用打指令：直接雙擊
+
+| 檔案 | 用途 |
+|---|---|
+| `SCAN.cmd` | 掃描 10 秒，列出附近所有 Polar 手環（不錄） |
+| `START_RECORDING.cmd` | 掃描 10 秒，**自動連線所有掃到的 Polar 手環並開始錄**；在視窗按 **Ctrl+C** 停止 |
+
+流程：手環全部開機戴上（藍燈）→ 雙擊 `START_RECORDING.cmd` → 視窗每分鐘印一行狀態 → 想停就按 Ctrl+C →
+CSV 在 **`data\` 資料夾**（每顆一個 `hr_<ID>_<日期時間>.csv`，加一個 `merged_<日期時間>.csv` 合併表）。
+手環數量不限，掃到幾顆就錄幾顆。
+
 ### 事前準備（每顆手環）
 
 1. 從充電座拿下來，**按一下按鈕開機**，LED 會閃。
@@ -32,6 +43,8 @@ uv run python scripts/scan.py 10
 
 ```bash
 uv run python polar_hr_logger.py 0C2D7633 AAAAAAAA BBBBBBBB CCCCCCCC
+# 或自動掃描、連所有掃到的：
+uv run python polar_hr_logger.py --auto
 ```
 
 - 每 60 秒印一行狀態（每顆的目前心率、筆數、斷線次數、電量）。
