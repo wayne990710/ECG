@@ -14,6 +14,7 @@ import argparse
 import asyncio
 import csv
 import logging
+import re
 import signal
 import sys
 import time
@@ -66,12 +67,19 @@ class DeviceLogger:
                  stop: asyncio.Event, battery_interval: float = 300.0,
                  client_factory=None):
         self.device_id = device_id
+        self.label = device_id.split("@")[0]   # 寫進 CSV 的裝置名稱（去掉模擬參數）
         self.session = session
         self.t0 = t0
         self.stop = stop
         self.battery_interval = battery_interval
-        self.client_factory = client_factory or BleakClient
-        self.path = out_dir / f"hr_{device_id}_{session}.csv"
+        self.is_sim = device_id.startswith("sim:")
+        if self.is_sim:
+            from sim_polar import SimClient
+            self.client_factory = SimClient
+        else:
+            self.client_factory = client_factory or BleakClient
+        safe_id = re.sub(r"[^A-Za-z0-9_-]+", "_", device_id.split("@")[0])
+        self.path = out_dir / f"hr_{safe_id}_{session}.csv"
         self._fh = open(self.path, "a", newline="", encoding="utf-8")
         self._w = csv.DictWriter(self._fh, fieldnames=CSV_FIELDS)
         if self._fh.tell() == 0:
@@ -105,7 +113,7 @@ class DeviceLogger:
         self._w.writerow({
             "pc_time": datetime.fromtimestamp(now).isoformat(timespec="milliseconds"),
             "elapsed_s": f"{now - self.t0:.3f}",
-            "device": self.device_id,
+            "device": self.label,
             "hr_bpm": hr,
             "rr_ms": ";".join(f"{x:.1f}" for x in rr),
             "contact": contact,
@@ -121,6 +129,7 @@ class DeviceLogger:
         backoff = 1.0
         try:
             while not self.stop.is_set():
+                t_start = time.time()
                 try:
                     await self._session_once()
                     backoff = 1.0
@@ -129,6 +138,8 @@ class DeviceLogger:
                 except Exception as e:
                     if self.n_connects:
                         self.n_disconnects += 1
+                    if time.time() - t_start > 60:
+                        backoff = 1.0   # 這次連線有撐過 1 分鐘，視為正常，重置退避
                     log.warning("[%s] %s（%.0f 秒後重試）", self.device_id, e, backoff)
                 if self.stop.is_set():
                     break
@@ -138,6 +149,11 @@ class DeviceLogger:
             self._fh.close()
 
     async def _find(self):
+        if self.is_sim:
+            from sim_polar import find_sim
+            dev = await find_sim(self.device_id)
+            self.address = dev.address
+            return dev
         dev = await BleakScanner.find_device_by_filter(
             lambda d, a: self.device_id in (d.name or a.local_name or ""), timeout=15.0)
         if dev is None:
@@ -225,7 +241,7 @@ def merge_csvs(paths: list[Path], out: Path) -> int:
         frames.append(s)
     if not frames:
         return 0
-    wide = pd.concat(frames, axis=1).sort_index()
+    wide = pd.concat(frames, axis=1, sort=True)
     wide = wide.resample("1s").mean()
     wide.index.name = "time"
     wide.round(1).to_csv(out)

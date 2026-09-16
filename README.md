@@ -1,6 +1,7 @@
 # ECG
 
-貼片（TriAnswer）與 Polar 手環心率比較，以及用 `bleak` 同時收錄多顆 Polar Verity Sense 心率。
+1. **多顆 Polar Verity Sense 同步收錄心率**（`polar_hr_logger.py`，用 `bleak`，Windows 實測）。
+2. 貼片（TriAnswer）與 Polar 手環的心率比較分析（`main.py`）。
 
 ## 安裝
 
@@ -8,10 +9,102 @@
 uv sync
 ```
 
-## 工具
+需要 Python 3.11 以上與電腦內建（或 USB）藍牙。
+
+## 一、同時收錄 4 顆 Polar Verity Sense
+
+### 事前準備（每顆手環）
+
+1. 從充電座拿下來，**按一下按鈕開機**，LED 會閃。
+2. 戴在手臂上（光學感測器貼皮膚）。
+3. 確認手機的 Polar Flow / Polar Beat **沒有連著這顆手環**（Verity Sense 最多同時兩條連線，但保險起見）。
+4. 裝置 ID 就是手環背面 / Polar Flow 顯示的 8 碼，例如 `0C2D7633`。
+
+### 掃描確認看得到
+
+```bash
+uv run python scripts/scan.py 10
+```
+
+會列出附近所有 `Polar Sense XXXXXXXX`。
+
+### 開始錄
+
+```bash
+uv run python polar_hr_logger.py 0C2D7633 AAAAAAAA BBBBBBBB CCCCCCCC
+```
+
+- 每 60 秒印一行狀態（每顆的目前心率、筆數、斷線次數、電量）。
+- **Ctrl-C** 停止，程式會收尾並自動產生合併表。
+- 要定時自動停：`--duration 3600`（秒）。
+- 常用參數：`--out 資料夾`、`--status-interval 秒`、`--battery-interval 秒`、`--stagger 秒`（各顆啟動間隔，預設 2）。
+
+### 輸出檔
+
+每顆一個檔 `data/hr_<ID>_<session>.csv`，每收到一筆通知寫一列並立即 flush：
+
+| 欄位 | 說明 |
+|---|---|
+| `pc_time` | 電腦收到通知的時間（ISO 8601，毫秒） |
+| `elapsed_s` | 從本次 session 開始算的秒數 |
+| `device` | 裝置 ID |
+| `hr_bpm` | 心率；0 表示手環沒量到 |
+| `rr_ms` | RR 間隔（毫秒），一筆可能多個，用 `;` 分隔；無則空 |
+| `contact` | 感測器接觸旗標（bit0 = 偵測到接觸、bit1 = 支援接觸偵測） |
+| `battery` | 最近一次讀到的電量 % |
+
+結束時另產生 `data/merged_<session>.csv`：每秒一列、每顆一欄 `hr_<ID>`，`hr_bpm=0` 視為缺值，同一秒多筆取平均。
+事後也可以用：
+
+```bash
+uv run python merge_hr.py --session 20260917_080000
+```
+
+### 韌性設計
+
+- 每顆手環各自一個非同步 task，一顆掛掉不影響其他顆。
+- 斷線自動重連，指數退避 1 → 2 → 4 … → 30 秒；連線撐過 1 分鐘就重置退避。
+- 掃描不到裝置也會持續重試（不用重啟程式）。
+- 各顆逐一啟動（預設間隔 2 秒），避免 Windows 同時發起多條 BLE 連線。
+- 每 5 分鐘讀一次電量。
+
+### 沒有真機時的模擬
+
+裝置 ID 以 `sim:` 開頭就會用模擬裝置，可以測多裝置與重連邏輯：
+
+```bash
+uv run python polar_hr_logger.py --duration 60 "sim:A" "sim:B@drop=20" "sim:C@fail=2"
+```
+
+`drop=秒` 表示每連線幾秒就假裝斷線；`fail=次數` 表示前幾次連線失敗。
+
+### 測試
+
+```bash
+uv run pytest
+```
+
+### 已知問題
+
+- **手環放在充電座上且充飽（100%）時**，會接受連線但約 12 秒後主動切斷無線鏈路，收不到任何心率通知。
+  這是裝置韌體行為，軟體端無解。請把手環從充電座拿下來、按按鈕開機再錄。詳見 `LOG.md`。
+- 手環沒貼皮膚時 `hr_bpm` 會是 0，這是正常的。
+- 資料夾在 OneDrive 內時，每秒 flush 可能讓 OneDrive 頻繁同步；有問題可用 `--out` 指到 OneDrive 外。
+
+### 其他小工具
 
 - `scripts/scan.py [秒數] [-v]`：掃描附近 BLE 裝置，標出 Polar。
-- `scripts/connect_test.py <裝置ID> [秒數]`：連線一顆並印出心率通知。
-- `main.py`：貼片 ECG 與 Polar Flow 匯出 CSV 的心率比較分析。
+- `scripts/connect_test.py <裝置ID> [秒數]`：連一顆並印出每筆心率封包，排錯用。
+- `scripts/experiment_*.py`：排查斷線問題時的實驗腳本。
 
-多裝置收錄程式與完整計畫見 `PLAN.md`。
+## 二、貼片 vs 手環心率比較（`main.py`）
+
+讀 TriAnswer 貼片的原始 ECG（檔名需含取樣率如 `333Hz` 與 14 位開始時間）與 Polar Flow 匯出的 CSV，
+自動找 R 波、剔除異常 RR、對齊時鐘偏移，輸出相關係數、偏差、Bland-Altman 界限與 `merged_hr.csv`。
+
+```bash
+uv run python main.py
+```
+
+`polar_hr_logger.py` 產生的 `merged_*.csv` 欄位是 `time, hr_<ID>...`，可直接改 `main.py` 的
+`load_polar` 讀進來（或把某一欄改名成 `hr_polar`）。
