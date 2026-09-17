@@ -1,10 +1,18 @@
 {
-  "0C2D7633": "1P",
+  "0C2D7633": {
+    "label": "1P",
+    "skip": true,
+    "note": "韌體 3.0.16，Windows 上會 19 秒斷線（polar-ble-sdk#827）"
+  },
   "0C2DC632": "2P",
   "0C2CCC37": "3P",
   "0C968230": "4P",
   "0C2D1732": "5P",
   "0C2CB23A": "6P",
   "0C2DCB37": "7P",
-  "0C2CB139": "8P"
+  "0C2CB139": {
+    "label": "8P",
+    "skip": true,
+    "note": "韌體 3.0.16，Windows 上會 19 秒斷線（polar-ble-sdk#827）"
+  }
 }

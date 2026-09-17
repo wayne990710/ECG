@@ -32,13 +32,31 @@ CSV_FIELDS = ["pc_time", "elapsed_s", "device", "label", "hr_bpm", "rr_ms", "con
 DEVICES_FILE = Path(__file__).with_name("devices.json")
 
 
-def load_labels(path: Path = DEVICES_FILE) -> dict[str, str]:
-    """讀 devices.json：{"0C2D7633": "1P", ...}。沒有檔案就回空表。"""
+def load_devices(path: Path = DEVICES_FILE) -> tuple[dict[str, str], dict[str, str]]:
+    """讀 devices.json。值可以是 "1P"，或 {"label": "1P", "skip": true, "note": "…"}。
+
+    回傳 (labels, skips)：labels = {ID: 編號}，skips = {ID: 略過原因}。沒有檔案就回空表。
+    """
     try:
         with open(path, encoding="utf-8") as f:
-            return {str(k).upper(): str(v) for k, v in json.load(f).items()}
+            raw = json.load(f)
     except FileNotFoundError:
-        return {}
+        return {}, {}
+    labels: dict[str, str] = {}
+    skips: dict[str, str] = {}
+    for k, v in raw.items():
+        dev_id = str(k).upper()
+        if isinstance(v, dict):
+            labels[dev_id] = str(v.get("label", dev_id))
+            if v.get("skip"):
+                skips[dev_id] = str(v.get("note", "devices.json 標記為略過"))
+        else:
+            labels[dev_id] = str(v)
+    return labels, skips
+
+
+def load_labels(path: Path = DEVICES_FILE) -> dict[str, str]:
+    return load_devices(path)[0]
 
 
 log = logging.getLogger("polar")
@@ -290,11 +308,16 @@ async def discover_polar(seconds: float) -> list[str]:
             found[name.split()[-1]] = adv.rssi
     async with BleakScanner(cb):
         await asyncio.sleep(seconds)
-    labels = load_labels()
+    labels, skips = load_devices()
+    keep = []
     for dev_id, rssi in sorted(found.items()):
-        log.info("掃到 Polar %s%s（RSSI %d）", dev_id,
-                 f" = {labels[dev_id]}" if dev_id in labels else "（未對照）", rssi)
-    return sorted(found)
+        tag = f" = {labels[dev_id]}" if dev_id in labels else "（未對照）"
+        if dev_id in skips:
+            log.info("掃到 Polar %s%s（RSSI %d）→ 略過：%s", dev_id, tag, rssi, skips[dev_id])
+        else:
+            log.info("掃到 Polar %s%s（RSSI %d）", dev_id, tag, rssi)
+            keep.append(dev_id)
+    return keep
 
 
 async def main_async(args, client_factory=None) -> int:

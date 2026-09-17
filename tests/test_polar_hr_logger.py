@@ -126,3 +126,12 @@ def test_label_used_in_filename_and_csv(tmp_path):
     lg._fh.close()
     rows = list(csv.DictReader(open(lg.path, encoding="utf-8")))
     assert rows[0]["device"] == "sim:X" and rows[0]["label"] == "7P" and rows[0]["hr_bpm"] == "66"
+
+
+def test_load_devices_skip(tmp_path):
+    p = tmp_path / "devices.json"
+    p.write_text('{"A1": "1P", "B2": {"label": "8P", "skip": true, "note": "bad fw"}, "C3": {"label": "3P"}}',
+                 encoding="utf-8")
+    labels, skips = phl.load_devices(p)
+    assert labels == {"A1": "1P", "B2": "8P", "C3": "3P"}
+    assert skips == {"B2": "bad fw"}
