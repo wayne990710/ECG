@@ -107,6 +107,8 @@ uv run python merge_hr.py --session 20260917_080000
 - 每 5 分鐘讀一次電量。
 - 已連線但 15 秒沒收到心率會警告；60 秒沒收到就強制斷線重連（`--stale-reconnect`，Windows 有時不回報斷線）。
 - Ctrl-C / Ctrl-Break 都會優雅收尾。
+- 合併表每 5 分鐘自動更新一次（`--merge-interval`），視窗被直接關掉也會有最近的合併表；每顆的 CSV 本來就是逐筆寫入，不會丟。
+  若還是缺合併表，可事後補做：`uv run python merge_hr.py --session <檔名尾巴的日期時間>`。
 
 ### 無人值守的長時間收錄
 

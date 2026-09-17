@@ -381,7 +381,25 @@ async def main_async(args, client_factory=None) -> int:
                 log.info("達到設定時長 %.0f 秒，停止。", args.duration)
                 stop.set()
 
-    aux = [asyncio.create_task(status_printer()), asyncio.create_task(duration_timer())]
+    merged = out_dir / f"merged_{session}.csv"
+
+    def do_merge(final: bool = False) -> None:
+        try:
+            n = merge_csvs([lg.path for lg in loggers], merged)
+            if final:
+                log.info("合併表 %s（%d 列）", merged.name, n)
+        except Exception as e:
+            log.warning("合併失敗：%s", e)
+
+    async def periodic_merge():
+        # 視窗被直接關掉時不會有收尾，所以每隔一段時間就先把合併表寫出來
+        while not stop.is_set():
+            await _sleep_or_stop(args.merge_interval, stop)
+            if not stop.is_set():
+                await asyncio.get_running_loop().run_in_executor(None, do_merge)
+
+    aux = [asyncio.create_task(status_printer()), asyncio.create_task(duration_timer()),
+           asyncio.create_task(periodic_merge())]
     try:
         await stop.wait()
     finally:
@@ -402,12 +420,7 @@ async def main_async(args, client_factory=None) -> int:
         log.info("[%s] 筆數 %d，連線 %d 次，斷線 %d 次，電量 %s%%。%s → %s",
                  lg.tag, lg.n_samples, lg.n_connects, lg.n_disconnects,
                  lg.battery, gtxt, lg.path.name)
-    merged = out_dir / f"merged_{session}.csv"
-    try:
-        n = merge_csvs([lg.path for lg in loggers], merged)
-        log.info("合併表 %s（%d 列）", merged.name, n)
-    except Exception as e:
-        log.warning("合併失敗：%s", e)
+    do_merge(final=True)
     return 0
 
 
@@ -421,6 +434,8 @@ def parse_args(argv=None):
     p.add_argument("--stagger", type=float, default=2.0, help="各裝置啟動間隔秒數")
     p.add_argument("--battery-interval", type=float, default=300, help="讀電量間隔秒數")
     p.add_argument("--status-interval", type=float, default=60, help="印狀態行間隔秒數")
+    p.add_argument("--merge-interval", type=float, default=300,
+                   help="每隔幾秒自動更新一次合併表（防止視窗被直接關掉時沒有合併表）")
     p.add_argument("--no-data-warn", type=float, default=15, help="連線後幾秒沒收到心率就警告")
     p.add_argument("--stale-reconnect", type=float, default=60,
                    help="連線後幾秒沒收到心率就強制斷線重連（0 = 不做）")
