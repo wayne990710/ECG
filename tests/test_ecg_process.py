@@ -96,3 +96,17 @@ def test_gap_between_segments_is_marked_bad(tmp_path):
     rr = r["rr"]
     assert rr.loc[rr["rr_ms"] > 5000, "bad"].all()      # 跨 20 秒缺口的那一拍必須標為異常
     assert abs(r["summary"]["mean_hr"] - 70) < 2
+
+
+def test_merge_all_side_by_side(tmp_path):
+    import record_all
+    s = "20260101_000000"
+    (tmp_path / f"merged_{s}.csv").write_text(
+        "time,hr_2P,hr_3P\n2026-01-01 00:00:00,70.0,80.0\n2026-01-01 00:00:01,71.0,\n", encoding="utf-8")
+    (tmp_path / f"merged_ecg_{s}.csv").write_text(
+        "time,hr_E2512-03\n2026-01-01 00:00:01,72.5\n2026-01-01 00:00:02,73.0\n", encoding="utf-8")
+    assert record_all.merge_all(tmp_path, s) == 3
+    rows = list(csv.DictReader(open(tmp_path / f"merged_all_{s}.csv", encoding="utf-8")))
+    assert list(rows[0].keys()) == ["time", "hr_2P", "hr_3P", "hr_E2512-03"]
+    assert rows[1]["hr_2P"] == "71.0" and rows[1]["hr_E2512-03"] == "72.5" and rows[1]["hr_3P"] == ""
+    assert record_all.merge_all(tmp_path, "nothing") == 0

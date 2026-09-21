@@ -126,3 +126,6 @@
 - `INSTALL.cmd`（裝 uv → `uv sync --no-dev`）、`START_ECG.cmd`、`PROCESS_ECG.cmd`。安裝包 `dist/ECG_setup.zip` 由
   `git archive` 產生，`.gitattributes` 的 export-ignore 排除個人資料與開發紀錄。已解到乾淨暫存資料夾實跑 INSTALL 與冒煙測試通過。
 - **尚未做**：新的貼片收錄程式還沒對真機長時間實跑（寫完時貼片已關機）。連線與串流部分沿用昨天 6 顆壓測驗證過的同一套做法。
+- 使用者決定改用單機：3 貼片 + 6 Polar = 9 條連線（剛好是上限）。新增 `record_all.py` + `START_ALL.cmd`：一次掃描、
+  同一 session 同時收兩種裝置、一次 Ctrl+C 收尾，並產生 `merged_all_<session>.csv`（手環與貼片心率並排）。
+  超過 `--max-connections 9` 時保留全部貼片、手環依編號取到滿。模擬冒煙測試通過；真機 9 顆尚未實跑。
