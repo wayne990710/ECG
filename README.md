@@ -3,7 +3,23 @@
 1. **多顆 Polar Verity Sense 同步收錄心率**（`polar_hr_logger.py`，用 `bleak`，Windows 實測）。
 2. 貼片（TriAnswer）與 Polar 手環的心率比較分析（`main.py`）。
 
-## 安裝
+## 在新電腦上安裝（不用打指令）
+
+1. 把整個資料夾解壓縮到**路徑沒有中文的地方**，例如 `C:\ECG`（不要放 OneDrive）。
+2. 雙擊 `INSTALL.cmd`，等它跑完（需要網路，約 2–5 分鐘，只要做一次）。
+3. 之後直接雙擊：
+
+| 檔案 | 用途 |
+|---|---|
+| `SCAN.cmd` | 列出附近的 Polar 手環 |
+| `START_RECORDING.cmd` | 收錄所有 Polar 手環的心率 |
+| `START_ECG.cmd` | 收錄所有 TriBLE 心電貼片的原始波形，結束時自動算心率 |
+| `PROCESS_ECG.cmd` | 補做心電後處理（收錄視窗被直接關掉時用） |
+
+一臺筆電的藍牙同時最多約 **9 條連線**（實測 Intel 晶片）。6 貼片 + 6 手環要分兩臺電腦收，
+兩臺都開啟 Windows 自動對時（設定 → 時間與語言 → 立即同步）。
+
+## 安裝（開發用）
 
 ```bash
 uv sync
@@ -11,7 +27,7 @@ uv sync
 
 需要 Python 3.11 以上與電腦內建（或 USB）藍牙。
 
-## 一、同時收錄 4 顆 Polar Verity Sense
+## 一、同時收錄多顆 Polar Verity Sense
 
 ### 不用打指令：直接雙擊
 
@@ -155,7 +171,35 @@ uv run pytest
 - `scripts/connect_test.py <裝置ID> [秒數]`：連一顆並印出每筆心率封包，排錯用。
 - `scripts/experiment_*.py`：排查斷線問題時的實驗腳本。
 
-## 二、貼片 vs 手環心率比較（`main.py`）
+## 二、TriBLE 心電貼片收錄（`trible_logger.py` + `ecg_process.py`）
+
+貼片走 BLE，自訂服務 `0xA000` / 特徵 `0xA001`，訂閱即串流：每包 108 bytes = 36 點 × 3 通道（uint8 交錯），
+約 1000 Hz/通道。**每顆貼片的取樣時脈差到 ±1.3%**，所以時間軸一律以電腦收到封包的時間為準。
+
+收錄時每顆貼片即時寫兩個原始檔（視窗被關掉也不會丟）：
+
+| 檔案 | 內容 |
+|---|---|
+| `ecg_<編號>_<session>.bin` | 原始位元組，3 通道交錯 uint8。Python：`np.fromfile(f, np.uint8).reshape(-1, 3)` |
+| `ecg_<編號>_<session>_index.csv` | 每個封包一列：電腦時間、連線段編號、位元組位移、長度 |
+
+按 Ctrl+C 結束後自動後處理，產生：
+
+| 檔案 | 內容 |
+|---|---|
+| `ecgrr_<編號>_<session>.csv` | 每一拍：`time, rr_ms, bad`（`bad=1` 不應納入 HRV：超出生理範圍、離群、跨斷線缺口、訊號飽和） |
+| `ecghr_<編號>_<session>.csv` | 每秒心率 `time, hr_ecg` |
+| `merged_ecg_<session>.csv` | 每秒一列、每顆貼片一欄，可和 Polar 的 `merged_*.csv` 用 `time` 對齊 |
+| `ecg_summary_<session>.csv` | 每顆一列：實際取樣率、極性是否被翻轉與信心值、拍數、異常 RR 比例、平均 HR、SDNN、RMSSD |
+
+後處理做的事：(1) 對每個連線段用封包到達時間線性擬合，估出實際取樣率與每個取樣點的時間；
+(2) **極性自動矯正**：疊幾十拍取平均波形，主偏折朝下就整段翻轉，結果記在 summary；
+(3) 15–35 Hz 帶通找 R 波，再細修到 ±30 ms 內的實際峰頂；(4) 標記異常 RR。
+
+貼片沒對照編號時顯示為 `E<ID>`（如 `E2512-03`）；要編號就在 `devices.json` 加 `"2512-03": "1E"`。
+`--export-txt` 可另外匯出 `main.py` 讀得懂的單通道 txt。
+
+## 三、貼片 vs 手環心率比較（`main.py`）
 
 讀 TriAnswer 貼片的原始 ECG（檔名需含取樣率如 `333Hz` 與 14 位開始時間）與 Polar Flow 匯出的 CSV，
 自動找 R 波、剔除異常 RR、對齊時鐘偏移，輸出相關係數、偏差、Bland-Altman 界限與 `merged_hr.csv`。

@@ -4,6 +4,11 @@ rem Press Ctrl+C in this window to stop; CSV files are saved in the data folder.
 cd /d "%~dp0"
 chcp 65001 >nul
 set PYTHONIOENCODING=utf-8
+if not exist ".venv\Scripts\python.exe" (
+  echo Please double-click INSTALL.cmd first.
+  pause
+  exit /b 1
+)
 echo ==============================================================
 echo  Polar Verity Sense heart-rate recorder
 echo  1. Put every sensor on (blue LED = heart-rate mode).

@@ -12,3 +12,6 @@ wheels/
 # 收錄資料
 data/*
 !data/.gitkeep
+
+# 打包輸出
+dist/

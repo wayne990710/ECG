@@ -1,3 +1,10 @@
 * text=auto eol=lf
 *.CSV -text
 *.txt -text
+*.cmd text eol=crlf
+# 不放進安裝包的個人資料與開發紀錄
+TriAnswer_CH1_*.txt export-ignore
+*.CSV export-ignore
+merged_hr.csv export-ignore
+PLAN.md export-ignore
+LOG.md export-ignore
