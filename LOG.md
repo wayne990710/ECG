@@ -141,3 +141,10 @@
   3P/5P/6P/7P 各嘗試 17 次全部 `Unreachable` / `TimeoutError`。
 - **結論：TP-Link 卡同時 BLE 連線上限 = 8 條，比內建 Intel（9 條）還少。** 12 顆單機仍不可行。
   建議拔掉 TP-Link、重新啟用 Intel，維持 3 貼片 + 6 Polar（`START_ALL.cmd`）。
+
+## 09-22 兩臺電腦分工
+- `record_all.py --only ecg|polar`、`START_PATCHES.cmd` / `START_POLARS.cmd`；devices.json 7 顆貼片全部啟用（含新看到的 2512-05）。
+- `clock_check.py`（SNTP 對 4 個 NTP 伺服器取中位數）+ `CLOCK_CHECK.cmd`；record_all 開錄前自動檢查，偏差 >1 s 印警告。
+  這臺筆電此刻慢 0.92 s。
+- `combine.py` + `COMBINE.cmd`：把同一天兩臺產生的 merged_*.csv / merged_ecg_*.csv 依 time 合成 merged_all_<日期>.csv，
+  session 時間戳不同也可以，同一顆出現在多檔會合成同一欄。測試 23 個全過。

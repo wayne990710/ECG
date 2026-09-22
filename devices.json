@@ -49,20 +49,18 @@
   },
   "2605-02": {
     "label": "E2605-02",
-    "type": "ecg",
-    "skip": true,
-    "note": "這次不使用（要用就把 skip 這行刪掉）"
+    "type": "ecg"
   },
   "2605-03": {
     "label": "E2605-03",
-    "type": "ecg",
-    "skip": true,
-    "note": "這次不使用（要用就把 skip 這行刪掉）"
+    "type": "ecg"
   },
   "2605-05": {
     "label": "E2605-05",
-    "type": "ecg",
-    "skip": true,
-    "note": "這次不使用（要用就把 skip 這行刪掉）"
+    "type": "ecg"
+  },
+  "2512-05": {
+    "label": "E2512-05",
+    "type": "ecg"
   }
 }

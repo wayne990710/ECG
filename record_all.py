@@ -2,6 +2,8 @@
 
 用法：
     uv run python record_all.py                       # 固定名單：devices.json 裡沒有 skip 的全部裝置
+    uv run python record_all.py --only ecg            # 兩臺電腦分工：這臺只錄貼片
+    uv run python record_all.py --only polar          # 兩臺電腦分工：這臺只錄手環
     uv run python record_all.py --auto                # 改成掃描模式：掃到什麼連什麼
     uv run python record_all.py --duration 2700       # 錄 45 分鐘後自動停
     uv run python record_all.py --ecg 2512-03 --polar 0C2DC632 0C2CCC37   # 指定裝置
@@ -98,6 +100,10 @@ async def main_async(args) -> int:
         table = load_device_table()
         ecg_ids, polar_ids = expected_from_table(table)
         skipped = [e["label"] for e in table.values() if e["skip"]]
+        if args.only == "ecg":
+            polar_ids = []
+        elif args.only == "polar":
+            ecg_ids = []
         if not ecg_ids and not polar_ids:
             log.error("devices.json 裡沒有任何要錄的裝置。")
             return 2
@@ -116,6 +122,20 @@ async def main_async(args) -> int:
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
     session = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    # 兩臺電腦分工時靠電腦時鐘對齊，開錄前檢查一次
+    try:
+        from clock_check import clock_offset
+        off = await asyncio.get_running_loop().run_in_executor(None, clock_offset)
+        if off is None:
+            log.warning("查不到網路時間，無法確認電腦時鐘是否準確（沒有網路？）")
+        elif abs(off) > 1.0:
+            log.warning("!!! 這臺電腦的時鐘比標準時間%s %.1f 秒，請到 設定→時間與語言 按「立即同步」再重錄 !!!",
+                        "快" if off > 0 else "慢", abs(off))
+        else:
+            log.info("電腦時鐘偏差 %+.3f 秒，OK", off)
+    except Exception as ex:
+        log.warning("時鐘檢查失敗：%s", ex)
     t0 = time.time()
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
@@ -251,6 +271,7 @@ def parse_args(argv=None):
     p.add_argument("--ecg", nargs="*", default=[], help="指定貼片 ID（如 2512-03）；有指定就不自動掃描")
     p.add_argument("--polar", nargs="*", default=[], help="指定 Polar ID（如 0C2DC632）")
     p.add_argument("--auto", action="store_true", help="掃描模式：掃到什麼連什麼（預設用 devices.json 固定名單）")
+    p.add_argument("--only", choices=["ecg", "polar"], help="兩臺電腦分工：這臺只錄貼片或只錄手環")
     p.add_argument("--scan-time", type=float, default=12.0)
     p.add_argument("--low-battery", type=int, default=20, help="手環電量低於此百分比就在畫面警告")
     p.add_argument("--max-connections", type=int, default=9, help="這臺電腦藍牙的同時連線上限")

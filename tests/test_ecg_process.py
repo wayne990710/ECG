@@ -141,3 +141,36 @@ def test_expected_list_keeps_searching_for_missing(tmp_path):
     a = list(tmp_path.glob("hr_sim_A_*.csv"))[0].read_text(encoding="utf-8").strip().splitlines()
     z = list(tmp_path.glob("hr_sim_Z_*.csv"))[0].read_text(encoding="utf-8").strip().splitlines()
     assert len(a) >= 4 and len(z) == 1
+
+
+def test_combine_two_machines(tmp_path):
+    import combine
+    (tmp_path / "merged_20260923_101500.csv").write_text(
+        "time,hr_2P,hr_3P\n2026-09-23 10:15:00,70.0,80.0\n2026-09-23 10:15:01,71.0,81.0\n", encoding="utf-8")
+    (tmp_path / "merged_ecg_20260923_101430.csv").write_text(
+        "time,hr_E2512-03\n2026-09-23 10:15:01,72.5\n2026-09-23 10:15:02,73.0\n", encoding="utf-8")
+    other = tmp_path / "other"; other.mkdir()
+    (other / "merged_20260923_140000.csv").write_text(
+        "time,hr_2P\n2026-09-23 14:00:00,90.0\n", encoding="utf-8")
+    files = combine.collect([tmp_path, other], "20260923")
+    assert len(files) == 3
+    n, cols = combine.combine(files, tmp_path / "merged_all_20260923.csv")
+    assert cols == ["hr_2P", "hr_3P", "hr_E2512-03"]
+    rows = list(csv.DictReader(open(tmp_path / "merged_all_20260923.csv", encoding="utf-8")))
+    assert rows[0]["time"] == "2026-09-23 10:15:00" and rows[-1]["time"] == "2026-09-23 14:00:00"
+    assert rows[1]["hr_2P"] == "71.0" and rows[1]["hr_E2512-03"] == "72.5"
+    assert n == 3 * 3600 + 60 * 45 + 1
+
+
+def test_only_flag_filters_list(tmp_path, monkeypatch):
+    import json
+    import polar_hr_logger as phl
+    import record_all
+    p = tmp_path / "devices.json"
+    json.dump({"0C2DC632": "2P", "2512-03": {"label": "E1", "type": "ecg"}}, open(p, "w", encoding="utf-8"))
+    monkeypatch.setattr(phl, "DEVICES_FILE", p)
+    table = phl.load_device_table(p)
+    ecg, polar = record_all.expected_from_table(table)
+    assert ecg == ["2512-03"] and polar == ["0C2DC632"]
+    args = record_all.parse_args(["--only", "polar"])
+    assert args.only == "polar"
