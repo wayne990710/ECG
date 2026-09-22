@@ -59,6 +59,28 @@ def load_labels(path: Path = DEVICES_FILE) -> dict[str, str]:
     return load_devices(path)[0]
 
 
+def load_device_table(path: Path = DEVICES_FILE) -> dict[str, dict]:
+    """完整讀 devices.json：{ID: {"label", "type": "polar"|"ecg", "skip": bool, "note"}}。"""
+    try:
+        with open(path, encoding="utf-8") as f:
+            raw = json.load(f)
+    except FileNotFoundError:
+        return {}
+    table = {}
+    for k, v in raw.items():
+        dev_id = str(k).upper()
+        if isinstance(v, dict):
+            e = dict(v)
+            e.setdefault("label", dev_id)
+        else:
+            e = {"label": str(v)}
+        e.setdefault("type", "ecg" if "-" in dev_id else "polar")
+        e["skip"] = bool(e.get("skip"))
+        e["id"] = k if e["type"] == "ecg" else dev_id
+        table[dev_id] = e
+    return table
+
+
 log = logging.getLogger("polar")
 
 
@@ -130,6 +152,7 @@ class DeviceLogger:
         self._gap_times: list[float] = []   # 通知間隔統計用
         self._disconnected = asyncio.Event()
         self.address: str | None = None
+        self._last_notfound_log = 0.0
 
     # ---- callbacks
     def _on_hr(self, _sender, data: bytearray) -> None:
@@ -176,7 +199,14 @@ class DeviceLogger:
                         self.n_disconnects += 1
                     if time.time() - t_start > 60:
                         backoff = 1.0   # 這次連線有撐過 1 分鐘，視為正常，重置退避
-                    log.warning("[%s] %s（%.0f 秒後重試）", self.tag, e, backoff)
+                    if "找不到" in str(e):
+                        # 還沒開機的裝置會一直找；訊息每分鐘最多印一次，避免洗版
+                        if time.time() - self._last_notfound_log >= 60:
+                            log.warning("[%s] 還沒找到裝置，持續尋找中（請確認已開機、在附近）", self.tag)
+                            self._last_notfound_log = time.time()
+                        backoff = 1.0
+                    else:
+                        log.warning("[%s] %s（%.0f 秒後重試）", self.tag, e, backoff)
                 if self.stop.is_set():
                     break
                 await _sleep_or_stop(backoff, self.stop)

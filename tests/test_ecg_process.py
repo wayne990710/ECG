@@ -110,3 +110,34 @@ def test_merge_all_side_by_side(tmp_path):
     assert list(rows[0].keys()) == ["time", "hr_2P", "hr_3P", "hr_E2512-03"]
     assert rows[1]["hr_2P"] == "71.0" and rows[1]["hr_E2512-03"] == "72.5" and rows[1]["hr_3P"] == ""
     assert record_all.merge_all(tmp_path, "nothing") == 0
+
+
+def test_device_table_and_expected(tmp_path):
+    import json
+    import polar_hr_logger as phl
+    import record_all
+    p = tmp_path / "devices.json"
+    json.dump({
+        "0C2DC632": "2P",
+        "0C2D7633": {"label": "1P", "skip": True},
+        "2512-03": {"label": "E2512-03", "type": "ecg"},
+        "2605-02": {"label": "E2605-02", "type": "ecg", "skip": True},
+        "2603-09": {"type": "ecg"},
+    }, open(p, "w", encoding="utf-8"))
+    table = phl.load_device_table(p)
+    assert table["0C2DC632"] == {"label": "2P", "type": "polar", "skip": False, "id": "0C2DC632"}
+    assert table["2603-09"]["label"] == "2603-09" and table["2603-09"]["type"] == "ecg"
+    ecg, polar = record_all.expected_from_table(table)
+    assert ecg == ["2603-09", "2512-03"] and polar == ["0C2DC632"]
+
+
+def test_expected_list_keeps_searching_for_missing(tmp_path):
+    """名單裡有一顆永遠連不上的手環（模擬未開機）：其他顆照常錄，它的檔案只有表頭。"""
+    import asyncio as aio
+    import record_all
+    args = record_all.parse_args(["--polar", "sim:A", "sim:Z@fail=99", "--duration", "6",
+                                  "--status-interval", "2", "--out", str(tmp_path)])
+    assert aio.run(record_all.main_async(args)) == 0
+    a = list(tmp_path.glob("hr_sim_A_*.csv"))[0].read_text(encoding="utf-8").strip().splitlines()
+    z = list(tmp_path.glob("hr_sim_Z_*.csv"))[0].read_text(encoding="utf-8").strip().splitlines()
+    assert len(a) >= 4 and len(z) == 1

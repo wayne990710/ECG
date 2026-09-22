@@ -1,11 +1,14 @@
 """一個視窗同時收錄 TriBLE 心電貼片與 Polar 手環（同一臺電腦、同一個 session）。
 
 用法：
-    uv run python record_all.py                       # 自動掃描，連所有貼片與手環
+    uv run python record_all.py                       # 固定名單：devices.json 裡沒有 skip 的全部裝置
+    uv run python record_all.py --auto                # 改成掃描模式：掃到什麼連什麼
     uv run python record_all.py --duration 2700       # 錄 45 分鐘後自動停
-    uv run python record_all.py --ecg 2512-03 --polar 0C2DC632 0C2CCC37   # 指定裝置，不掃描
+    uv run python record_all.py --ecg 2512-03 --polar 0C2DC632 0C2CCC37   # 指定裝置
     Ctrl-C 停止：自動合併手環心率、計算貼片心率，並產生總表。
 
+固定名單模式下，還沒開機或還沒連到的裝置會一直找，接上就自動開始錄，不用重開程式。
+手環電量低於 --low-battery（預設 20%）會在畫面印出警告；貼片的藍牙服務沒有電量資訊，無法提醒。
 一臺筆電的藍牙同時最多約 9 條連線（--max-connections）。超過時保留全部貼片，手環依編號取到滿為止。
 
 輸出（data/）：Polar 的 hr_*.csv / merged_*.csv、貼片的 ecg_*.bin / ecgrr_* / ecghr_* / merged_ecg_*，
@@ -25,7 +28,7 @@ from pathlib import Path
 import pandas as pd
 from bleak import BleakScanner
 
-from polar_hr_logger import DeviceLogger, _sleep_or_stop, load_devices, merge_csvs
+from polar_hr_logger import DeviceLogger, _sleep_or_stop, load_device_table, load_devices, merge_csvs
 from trible_logger import NAME_PREFIX, PatchLogger, patch_id
 
 log = logging.getLogger("record")
@@ -58,6 +61,13 @@ async def discover(seconds: float) -> tuple[list[str], list[str]]:
     return keep_ecg, keep_polar
 
 
+def expected_from_table(table: dict) -> tuple[list[str], list[str]]:
+    """devices.json 裡沒有 skip 的裝置 → (貼片 ID 列表, Polar ID 列表)，各依編號排序。"""
+    ecg = sorted((e for e in table.values() if e["type"] == "ecg" and not e["skip"]), key=lambda e: e["label"])
+    polar = sorted((e for e in table.values() if e["type"] == "polar" and not e["skip"]), key=lambda e: e["label"])
+    return [e["id"] for e in ecg], [e["id"] for e in polar]
+
+
 def merge_all(out_dir: Path, session: str) -> int:
     """把 Polar 合併表與貼片合併表依時間並排成一張總表。回傳列數。"""
     frames = []
@@ -78,12 +88,21 @@ def merge_all(out_dir: Path, session: str) -> int:
 async def main_async(args) -> int:
     if args.ecg or args.polar:
         ecg_ids, polar_ids = list(args.ecg), list(args.polar)
-    else:
+    elif args.auto:
         log.info("自動掃描 %.0f 秒…", args.scan_time)
         ecg_ids, polar_ids = await discover(args.scan_time)
-    if not ecg_ids and not polar_ids:
-        log.error("沒有掃到任何貼片或手環。請確認都已開機、在附近，且貼片沒有被手機 App 連著。")
-        return 2
+        if not ecg_ids and not polar_ids:
+            log.error("沒有掃到任何貼片或手環。請確認都已開機、在附近，且貼片沒有被手機 App 連著。")
+            return 2
+    else:
+        table = load_device_table()
+        ecg_ids, polar_ids = expected_from_table(table)
+        skipped = [e["label"] for e in table.values() if e["skip"]]
+        if not ecg_ids and not polar_ids:
+            log.error("devices.json 裡沒有任何要錄的裝置。")
+            return 2
+        log.info("固定名單（devices.json）：貼片 %s，手環 %s；略過 %s。沒連到的會一直找。",
+                 [table[i.upper()]["label"] for i in ecg_ids], [table[i]["label"] for i in polar_ids], skipped)
     total = len(ecg_ids) + len(polar_ids)
     if total > args.max_connections:
         room = max(args.max_connections - len(ecg_ids), 0)
@@ -128,19 +147,44 @@ async def main_async(args) -> int:
             await _sleep_or_stop(args.stagger, stop)
         tasks.append(asyncio.create_task(lg.run(), name=lg.label))
 
+    low_batt_warned: set[str] = set()
+
+    def check_battery() -> None:
+        for d in polars:
+            if d.battery is not None and d.battery <= args.low_battery and d.label not in low_batt_warned:
+                low_batt_warned.add(d.label)
+                log.warning("!!! 手環 %s 電量只剩 %d%%，請準備更換或充電 !!!", d.label, d.battery)
+            elif d.battery is not None and d.battery > args.low_battery + 5:
+                low_batt_warned.discard(d.label)
+
     async def status_printer():
         while not stop.is_set():
             await _sleep_or_stop(args.status_interval, stop)
             if stop.is_set():
                 break
             now = time.time()
-            e = " ".join(
-                f"{p.label}:{p.rate_hz():.0f}Hz" + ("" if p.last_packet and now - p.last_packet < 3 else "(無資料!)")
-                + (f"/斷{p.n_disconnects}" if p.n_disconnects else "") for p in patches)
-            h = " ".join(
-                f"{d.label}:{d.last_hr if d.last_sample and now - d.last_sample < 5 else '無資料!'}"
-                + (f"/斷{d.n_disconnects}" if d.n_disconnects else "") for d in polars)
-            log.info("狀態 %3.0f 分 | 貼片 %s | 手環HR %s", (now - t0) / 60, e or "-", h or "-")
+
+            def patch_state(p):
+                if p.n_connects == 0:
+                    return f"{p.label}:尋找中"
+                if not p.last_packet or now - p.last_packet > 3:
+                    return f"{p.label}:無資料!"
+                return f"{p.label}:{p.rate_hz():.0f}Hz" + (f"/斷{p.n_disconnects}" if p.n_disconnects else "")
+
+            def polar_state(d):
+                if d.n_connects == 0:
+                    return f"{d.label}:尋找中"
+                if not d.last_sample or now - d.last_sample > 5:
+                    return f"{d.label}:無資料!"
+                batt = f"(電{d.battery}%!)" if d.battery is not None and d.battery <= args.low_battery else ""
+                return f"{d.label}:{d.last_hr}{batt}" + (f"/斷{d.n_disconnects}" if d.n_disconnects else "")
+
+            missing = [x.label for x in [*patches, *polars] if x.n_connects == 0]
+            log.info("狀態 %3.0f 分 | 貼片 %s | 手環HR %s", (now - t0) / 60,
+                     " ".join(map(patch_state, patches)) or "-", " ".join(map(polar_state, polars)) or "-")
+            if missing:
+                log.warning("尚未連上：%s（持續尋找中）", ", ".join(missing))
+            check_battery()
 
     async def duration_timer():
         if args.duration:
@@ -206,7 +250,9 @@ def parse_args(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--ecg", nargs="*", default=[], help="指定貼片 ID（如 2512-03）；有指定就不自動掃描")
     p.add_argument("--polar", nargs="*", default=[], help="指定 Polar ID（如 0C2DC632）")
+    p.add_argument("--auto", action="store_true", help="掃描模式：掃到什麼連什麼（預設用 devices.json 固定名單）")
     p.add_argument("--scan-time", type=float, default=12.0)
+    p.add_argument("--low-battery", type=int, default=20, help="手環電量低於此百分比就在畫面警告")
     p.add_argument("--max-connections", type=int, default=9, help="這臺電腦藍牙的同時連線上限")
     p.add_argument("--out", default="data")
     p.add_argument("--duration", type=float, default=0, help="錄多久（秒），0 = 直到 Ctrl-C")

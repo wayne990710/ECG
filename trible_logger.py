@@ -73,6 +73,7 @@ class PatchLogger:
         self.max_gap = 0.0
         self._disconnected = asyncio.Event()
         self._rate_mark = (time.time(), self.n_bytes)
+        self._last_notfound_log = 0.0
 
     def _on_data(self, _sender, data: bytearray) -> None:
         now = time.time()
@@ -114,7 +115,13 @@ class PatchLogger:
                         self.n_disconnects += 1
                     if time.time() - t_start > 60:
                         backoff = 1.0
-                    log.warning("[%s] %s（%.0f 秒後重試）", self.tag, e, backoff)
+                    if "找不到" in str(e):
+                        if time.time() - self._last_notfound_log >= 60:
+                            log.warning("[%s] 還沒找到貼片，持續尋找中（請確認已開機、沒被手機 App 連著）", self.tag)
+                            self._last_notfound_log = time.time()
+                        backoff = 1.0
+                    else:
+                        log.warning("[%s] %s（%.0f 秒後重試）", self.tag, e, backoff)
                 if self.stop.is_set():
                     break
                 await _sleep_or_stop(backoff, self.stop)

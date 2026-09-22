@@ -2,17 +2,67 @@
   "0C2D7633": {
     "label": "1P",
     "skip": true,
-    "note": "韌體 3.0.16，Windows 上會 19 秒斷線（polar-ble-sdk#827）"
+    "note": "韌體 3.0.16，Windows 上會 19 秒斷線（polar-ble-sdk#827）",
+    "type": "polar"
   },
-  "0C2DC632": "2P",
-  "0C2CCC37": "3P",
-  "0C968230": "4P",
-  "0C2D1732": "5P",
-  "0C2CB23A": "6P",
-  "0C2DCB37": "7P",
+  "0C2DC632": {
+    "label": "2P",
+    "type": "polar"
+  },
+  "0C2CCC37": {
+    "label": "3P",
+    "type": "polar"
+  },
+  "0C968230": {
+    "label": "4P",
+    "type": "polar"
+  },
+  "0C2D1732": {
+    "label": "5P",
+    "type": "polar"
+  },
+  "0C2CB23A": {
+    "label": "6P",
+    "type": "polar"
+  },
+  "0C2DCB37": {
+    "label": "7P",
+    "type": "polar"
+  },
   "0C2CB139": {
     "label": "8P",
     "skip": true,
-    "note": "韌體 3.0.16，Windows 上會 19 秒斷線（polar-ble-sdk#827）"
+    "note": "韌體 3.0.16，Windows 上會 19 秒斷線（polar-ble-sdk#827）",
+    "type": "polar"
+  },
+  "2512-03": {
+    "label": "E2512-03",
+    "type": "ecg"
+  },
+  "2603-09": {
+    "label": "E2603-09",
+    "type": "ecg"
+  },
+  "2603-10": {
+    "label": "E2603-10",
+    "type": "ecg"
+  },
+  "2605-02": {
+    "label": "E2605-02",
+    "type": "ecg",
+    "skip": true,
+    "note": "這次不使用（要用就把 skip 這行刪掉）"
+  },
+  "2605-03": {
+    "label": "E2605-03",
+    "type": "ecg",
+    "skip": true,
+    "note": "這次不使用（要用就把 skip 這行刪掉）"
+  },
+  "2605-05": {
+    "label": "E2605-05",
+    "type": "ecg",
+    "skip": true,
+    "note": "這次不使用（要用就把 skip 這行刪掉）"
   }
 }
