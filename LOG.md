@@ -148,3 +148,5 @@
   這臺筆電此刻慢 0.92 s。
 - `combine.py` + `COMBINE.cmd`：把同一天兩臺產生的 merged_*.csv / merged_ecg_*.csv 依 time 合成 merged_all_<日期>.csv，
   session 時間戳不同也可以，同一顆出現在多檔會合成同一欄。測試 23 個全過。
+
+- 09-29 貼片 2512-05 於實驗中故障，名單改用 2605-04 代替（devices.json）。
