@@ -174,3 +174,30 @@ def test_only_flag_filters_list(tmp_path, monkeypatch):
     assert ecg == ["2512-03"] and polar == ["0C2DC632"]
     args = record_all.parse_args(["--only", "polar"])
     assert args.only == "polar"
+
+
+def test_flat_signal_is_rejected(tmp_path):
+    """電極沒接觸：訊號只在 11–13 之間跳（實測 2605-04 的情況），不可以算出心率。"""
+    rng = np.random.default_rng(0)
+    flat = (12 + (rng.random((60000, 3)) > 0.9)).astype(np.uint8)
+    write_recording(tmp_path, "F", "20260101_000000", flat, 1000.0, t_start=1_800_000_000.0)
+    with pytest.raises(ValueError, match="沒有心電訊號"):
+        ep.process_one(tmp_path / "ecg_F_20260101_000000.bin", tmp_path / "ecg_F_20260101_000000_index.csv")
+    assert ep.process_session(tmp_path, "20260101_000000") is None
+    rows = list(csv.DictReader(open(tmp_path / "ecg_summary_20260101_000000.csv", encoding="utf-8")))
+    assert rows[0]["quality"] == "no_signal"
+    assert not list(tmp_path.glob("ecghr_*"))
+
+
+def test_electrode_falls_off_midway(tmp_path):
+    """前 40 秒正常、後 20 秒電極脫落變平：平的那段不可以貢獻心率。"""
+    good = synth_ecg(40, 1000.0, 70, False, seed=5)
+    flat = np.full((20000, 3), 120, dtype=np.uint8)
+    write_recording(tmp_path, "H", "20260101_000000", np.concatenate([good, flat]), 1000.0, t_start=1_800_000_000.0)
+    r = ep.process_one(tmp_path / "ecg_H_20260101_000000.bin", tmp_path / "ecg_H_20260101_000000_index.csv")
+    assert abs(r["summary"]["mean_hr"] - 70) < 2
+    hr = r["hr_1s"].dropna()
+    start = hr.index.min()
+    # 脫落後（第 40 秒起）不可以再有心率值
+    assert (hr.index - start).total_seconds().max() <= 42
+    assert r["summary"]["beats"] <= 50

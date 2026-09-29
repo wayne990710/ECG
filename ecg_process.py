@@ -27,6 +27,10 @@ log = logging.getLogger("ecgproc")
 
 NOMINAL_FS = 1000.0
 N_CH = 3
+# 訊號品質門檻（單位：ADC 計數，8-bit）。實測：正常佩戴 1–40 Hz 振幅約 30–50，電極沒接觸時約 0.5。
+MIN_AMPLITUDE = 6.0        # 整段振幅低於此值 → 判定無訊號，不輸出心率
+MIN_BEAT_AMPLITUDE = 4.0   # 單拍振幅低於此值 → 該拍標為異常
+POOR_BAD_RR_PCT = 20.0     # 異常 RR 比例高於此值 → 品質標為 poor
 
 
 # ---------------------------------------------------------------- 讀檔與時間軸
@@ -123,9 +127,15 @@ def detect_r_peaks(x: np.ndarray, fs: float) -> np.ndarray:
     return np.unique(np.array(out, dtype=int))
 
 
+def amplitude(x: np.ndarray) -> float:
+    """穩健的峰對峰振幅（去掉最極端的 0.5%）。"""
+    return float(np.percentile(x, 99.5) - np.percentile(x, 0.5)) if len(x) else 0.0
+
+
 def mark_bad_rr(rr_ms: np.ndarray, peaks: np.ndarray, raw: np.ndarray, gap_mask: np.ndarray,
-                rr_low=300, rr_high=2000, local_tol=0.3, window=31) -> np.ndarray:
-    """標記不可信的 RR：生理範圍外、與附近中位數差太多、跨越斷線缺口、或該拍內原始訊號飽和。"""
+                rr_low=300, rr_high=2000, local_tol=0.3, window=31, wide: np.ndarray | None = None) -> np.ndarray:
+    """標記不可信的 RR：生理範圍外、與附近中位數差太多、跨越斷線缺口、該拍內原始訊號飽和、
+    或該拍內訊號幾乎是平的（電極脫落）。"""
     bad = (rr_ms < rr_low) | (rr_ms > rr_high)
     for _ in range(3):
         s = pd.Series(np.where(bad, np.nan, rr_ms))
@@ -135,6 +145,8 @@ def mark_bad_rr(rr_ms: np.ndarray, peaks: np.ndarray, raw: np.ndarray, gap_mask:
         a, b = peaks[i], peaks[i + 1] + 1
         seg = raw[a:b]
         if gap_mask[a:b].any() or np.mean((seg == 0) | (seg == 255)) > 0.02:
+            bad[i] = True
+        elif wide is not None and b - a > 10 and (wide[a:b].max() - wide[a:b].min()) < MIN_BEAT_AMPLITUDE:
             bad[i] = True
     return bad
 
@@ -156,6 +168,11 @@ def process_one(bin_path: Path, idx_path: Path, channel: int = 0) -> dict:
 
     x = raw[:, channel].astype(float)
     x = x - np.median(x)
+    wide = bandpass(x, fs, 1, 40)
+    amp = amplitude(wide)
+    if amp < MIN_AMPLITUDE:
+        raise ValueError(f"沒有心電訊號：振幅只有 {amp:.1f}（正常佩戴約 30–50）。"
+                         "貼片可能沒貼在身上、電極沒接觸皮膚，或貼片故障")
     sign, conf = detect_polarity(x, fs)
     x *= sign
 
@@ -167,7 +184,7 @@ def process_one(bin_path: Path, idx_path: Path, channel: int = 0) -> dict:
     ok = ~np.isnan(t_beats)
     peaks, t_beats = peaks[ok], t_beats[ok]
     rr_ms = np.diff(t_beats) * 1000.0
-    bad = mark_bad_rr(rr_ms, peaks, raw[:, channel], gap_mask)
+    bad = mark_bad_rr(rr_ms, peaks, raw[:, channel], gap_mask, wide=wide)
 
     beat_time = pd.to_datetime(t_beats[1:], unit="s")
     rr = pd.DataFrame({"time": beat_time, "rr_ms": np.round(rr_ms, 1), "bad": bad.astype(int)})
@@ -177,7 +194,9 @@ def process_one(bin_path: Path, idx_path: Path, channel: int = 0) -> dict:
 
     good = rr_ms[~bad]
     adj = (~bad[:-1]) & (~bad[1:])
+    bad_pct = float(bad.mean() * 100)
     summary = {
+        "quality": "poor" if bad_pct > POOR_BAD_RR_PCT else "good", "amplitude": round(amp, 1),
         "n_samples": n, "minutes": round(n / fs / 60, 2), "fs_hz": round(fs, 2),
         "segments": len(segs), "polarity": "inverted→flipped" if sign < 0 else "normal",
         "polarity_conf": round(conf, 2), "beats": int(len(peaks)), "bad_rr_pct": round(float(bad.mean() * 100), 1),
@@ -209,7 +228,8 @@ def process_session(data_dir: Path, session: str, export: bool = False) -> pd.Da
             r = process_one(bin_path, idx_path)
         except Exception as e:
             log.warning("[%s] 無法處理：%s", label, e)
-            rows.append({"label": label, "error": str(e)})
+            rows.append({"label": label, "quality": "no_signal" if "沒有心電訊號" in str(e) else "error",
+                         "error": str(e)})
             continue
         r["rr"].to_csv(data_dir / f"ecgrr_{label}_{session}.csv", index=False,
                        date_format="%Y-%m-%dT%H:%M:%S.%f")
@@ -218,6 +238,9 @@ def process_session(data_dir: Path, session: str, export: bool = False) -> pd.Da
         cols.append(hr.rename(f"hr_{label}"))
         s = r["summary"]
         rows.append({"label": label, **s})
+        if s["quality"] == "poor":
+            log.warning("[%s] 訊號品質不佳：異常 RR 佔 %.1f%%，心率與 HRV 不可靠（貼片鬆脫、動作太大或雜訊）",
+                        label, s["bad_rr_pct"])
         log.info("[%s] %.1f 分，實際 %.1f Hz，極性 %s（信心 %.2f），%d 拍，異常 RR %.1f%%，平均 HR %.1f，SDNN %.0f，RMSSD %.0f",
                  label, s["minutes"], s["fs_hz"], s["polarity"], s["polarity_conf"], s["beats"],
                  s["bad_rr_pct"], s["mean_hr"], s["sdnn_ms"], s["rmssd_ms"])

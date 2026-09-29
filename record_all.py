@@ -189,7 +189,10 @@ async def main_async(args) -> int:
                     return f"{p.label}:尋找中"
                 if not p.last_packet or now - p.last_packet > 3:
                     return f"{p.label}:無資料!"
-                return f"{p.label}:{p.rate_hz():.0f}Hz" + (f"/斷{p.n_disconnects}" if p.n_disconnects else "")
+                sw = p.swing()
+                flat = "(訊號平!)" if sw is not None and sw < 8 else ""
+                return (f"{p.label}:{p.rate_hz():.0f}Hz{flat}"
+                        + (f"/斷{p.n_disconnects}" if p.n_disconnects else ""))
 
             def polar_state(d):
                 if d.n_connects == 0:

@@ -74,6 +74,16 @@ class PatchLogger:
         self._disconnected = asyncio.Event()
         self._rate_mark = (time.time(), self.n_bytes)
         self._last_notfound_log = 0.0
+        self._lo: int | None = None
+        self._hi: int | None = None
+
+    def swing(self) -> int | None:
+        """上次呼叫以來 CH1 的原始值擺幅（最大 − 最小）；沒資料回 None。呼叫後歸零。"""
+        if self._lo is None:
+            return None
+        v = self._hi - self._lo
+        self._lo = self._hi = None
+        return v
 
     def _on_data(self, _sender, data: bytearray) -> None:
         now = time.time()
@@ -81,6 +91,11 @@ class PatchLogger:
             self.max_gap = max(self.max_gap, now - self.last_packet)
         self.last_packet = now
         self.n_packets += 1
+        if len(data) >= 3:          # 追蹤 CH1 最近的最大最小值，供狀態行判斷電極是否有接觸
+            ch1 = data[0::3]
+            lo, hi = min(ch1), max(ch1)
+            self._lo = lo if self._lo is None else min(self._lo, lo)
+            self._hi = hi if self._hi is None else max(self._hi, hi)
         self._bin.write(data)
         self._idx.writerow([datetime.fromtimestamp(now).isoformat(timespec="milliseconds"),
                             f"{now - self.t0:.4f}", self.segment, self.n_bytes, len(data)])
