@@ -201,3 +201,20 @@ def test_electrode_falls_off_midway(tmp_path):
     # 脫落後（第 40 秒起）不可以再有心率值
     assert (hr.index - start).total_seconds().max() <= 42
     assert r["summary"]["beats"] <= 50
+
+
+def test_hrv_summary_cleans_polar_outliers(tmp_path):
+    """手環 blocker=0 的拍裡混了漏拍（×2）與誤拍（÷2）：清理後 SDNN 應接近真值，不清會爆掉。"""
+    import hrv_summary as hs
+    rng = np.random.default_rng(1)
+    rr = rng.normal(800, 30, 300)             # 真 SDNN ≈ 30
+    rr[50] *= 2; rr[120] /= 2; rr[200] *= 2   # 三個裝置沒標出來的錯拍
+    t = pd.to_datetime("2026-10-12 10:00:00") + pd.to_timedelta(np.cumsum(rr), unit="ms")
+    df = pd.DataFrame({"pc_time": t, "beat_time": t, "device": "X", "label": "9P", "ppi_ms": rr.round(),
+                       "err_ms": 10, "blocker": 0, "contact": 1, "hr": 75})
+    f = tmp_path / "ppi_9P_20261012_100000.csv"; df.to_csv(f, index=False)
+    out = hs.summarize([f], "5min")
+    assert out.iloc[0]["source"] == "polar_ppi" and out.iloc[0]["pct_valid"] == 100.0
+    assert out.iloc[0]["pct_clean"] < 100.0
+    assert 20 < out.iloc[0]["sdnn_ms"] < 40
+    assert out.iloc[0]["rmssd_ms"] < 60

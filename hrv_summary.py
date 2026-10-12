@@ -6,7 +6,9 @@
     uv run python hrv_summary.py --window 5min                       # 分段長度（預設 5min）
 輸出：data/hrv_<session 或 day>.csv，每列 = 一顆裝置 × 一個時段：
     label, window_start, n_beats, n_valid, pct_valid, mean_hr, sdnn_ms, rmssd_ms, pnn50
-只用「有效」的拍：手環 blocker=0、貼片 bad=0；一段內有效拍少於 60 就不算（留空）。
+只用「有效」的拍：手環 blocker=0、貼片 bad=0，**再**用和貼片相同的離群規則（300–2000 ms、
+與局部中位數差 >30% 剔除）清一次——實測手環 blocker=0 的拍裡仍有漏拍（間隔加倍）與誤拍。
+一段內有效拍少於 60 就不算（留空）。pct_valid 是裝置自己的旗標，pct_clean 是清理後剩下的比例。
 """
 from __future__ import annotations
 
@@ -19,6 +21,17 @@ import numpy as np
 import pandas as pd
 
 MIN_BEATS = 60
+
+
+def artifact_mask(rr_ms: np.ndarray, rr_low=300, rr_high=2000, local_tol=0.3, window=31) -> np.ndarray:
+    """回傳 True = 離群拍（和 ecg_process.mark_bad_rr 同一套規則）。"""
+    x = np.asarray(rr_ms, float)
+    bad = (x < rr_low) | (x > rr_high)
+    for _ in range(3):
+        s = pd.Series(np.where(bad, np.nan, x))
+        med = s.rolling(window, center=True, min_periods=3).median().bfill().ffill().to_numpy()
+        bad |= np.abs(x - med) > local_tol * med
+    return bad
 
 
 def load_beats(path: Path) -> tuple[str, pd.DataFrame] | None:
@@ -43,15 +56,22 @@ def load_beats(path: Path) -> tuple[str, pd.DataFrame] | None:
 
 def hrv_windows(beats: pd.DataFrame, window: str) -> pd.DataFrame:
     rows = []
+    beats = beats.copy()
+    # 在整段上套離群規則（只看裝置標為有效的拍），再切視窗
+    ok0 = beats["valid"].to_numpy()
+    clean = ok0.copy()
+    if ok0.sum() >= 5:
+        clean[ok0] = ~artifact_mask(beats.loc[ok0, "rr_ms"].to_numpy())
+    beats["clean"] = clean
     for start, g in beats.set_index("time").groupby(pd.Grouper(freq=window)):
         if g.empty:
             continue
-        v = g[g["valid"]]["rr_ms"].to_numpy()
-        row = {"window_start": start, "n_beats": len(g), "n_valid": len(v),
-               "pct_valid": round(100.0 * len(v) / len(g), 1)}
+        v = g[g["clean"]]["rr_ms"].to_numpy()
+        row = {"window_start": start, "n_beats": len(g), "n_valid": int(g["valid"].sum()),
+               "pct_valid": round(100.0 * g["valid"].mean(), 1), "pct_clean": round(100.0 * len(v) / len(g), 1)}
         if len(v) >= MIN_BEATS:
-            # 相鄰差只算「連續兩拍都有效」的
-            ok = g["valid"].to_numpy()
+            # 相鄰差只算「連續兩拍都乾淨」的
+            ok = g["clean"].to_numpy()
             rr = g["rr_ms"].to_numpy()
             adj = ok[:-1] & ok[1:]
             diffs = np.diff(rr)[adj]
@@ -76,7 +96,8 @@ def summarize(files: list[Path], window: str) -> pd.DataFrame:
             parts.append(w)
     if not parts:
         return pd.DataFrame()
-    cols = ["label", "source", "window_start", "n_beats", "n_valid", "pct_valid", "mean_hr", "sdnn_ms", "rmssd_ms", "pnn50"]
+    cols = ["label", "source", "window_start", "n_beats", "n_valid", "pct_valid", "pct_clean",
+            "mean_hr", "sdnn_ms", "rmssd_ms", "pnn50"]
     return pd.concat(parts, ignore_index=True).reindex(columns=cols).sort_values(["window_start", "label"])
 
 

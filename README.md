@@ -168,7 +168,8 @@ uv run python hrv_summary.py --session 20261012_100549      # 或 --day 20261012
 ```
 
 同時吃手環的 `ppi_*.csv` 與貼片的 `ecgrr_*.csv`，只用有效拍（`blocker=0` / `bad=0`），
-每顆裝置每 5 分鐘一列：`n_beats, n_valid, pct_valid, mean_hr, sdnn_ms, rmssd_ms, pnn50`。
+每顆裝置每 5 分鐘一列：`n_beats, n_valid, pct_valid, pct_clean, mean_hr, sdnn_ms, rmssd_ms, pnn50`。
+手環 `blocker=0` 的拍仍會混入漏拍與誤拍，所以再套一次和貼片相同的離群規則（`pct_clean` 是清完剩下的比例）。
 一段內有效拍少於 60 就留空。輸出 `data/hrv_<session>.csv`。
 事後也可以用：
 
