@@ -205,6 +205,7 @@ def test_electrode_falls_off_midway(tmp_path):
 
 def test_hrv_summary_cleans_polar_outliers(tmp_path):
     """手環 blocker=0 的拍裡混了漏拍（×2）與誤拍（÷2）：清理後 SDNN 應接近真值，不清會爆掉。"""
+    import pandas as pd
     import hrv_summary as hs
     rng = np.random.default_rng(1)
     rr = rng.normal(800, 30, 300)             # 真 SDNN ≈ 30
