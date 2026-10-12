@@ -135,3 +135,29 @@ def test_load_devices_skip(tmp_path):
     labels, skips = phl.load_devices(p)
     assert labels == {"A1": "1P", "B2": "8P", "C3": "3P"}
     assert skips == {"B2": "bad fw"}
+
+
+def test_parse_ppi_frame():
+    from sim_polar import encode_ppi_frame
+    frame = encode_ppi_frame([(60, 1000, 12, 0, 1), (61, 980, 536, 1, 1)])
+    out = phl.parse_ppi_frame(frame)
+    assert out == [{"hr": 60, "ppi_ms": 1000, "err_ms": 12, "blocker": 0, "contact": 1},
+                   {"hr": 61, "ppi_ms": 980, "err_ms": 536, "blocker": 1, "contact": 1}]
+    assert phl.parse_ppi_frame(bytes([1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 2, 3])) == []   # PPG 框不是 PPI
+    assert phl.parse_ppi_frame(b"\x03") == []
+
+
+def test_ppi_recorded_end_to_end(tmp_path):
+    args = phl.parse_args(["--duration", "6", "--status-interval", "3", "--out", str(tmp_path),
+                           "sim:A", "sim:B@noppi"])
+    assert asyncio.run(phl.main_async(args)) == 0
+    ppi_files = sorted(f.name for f in tmp_path.glob("ppi_*.csv"))
+    assert ppi_files == [f for f in ppi_files if "sim_A" in f] and len(ppi_files) == 1   # 沒 PPI 的裝置不留空檔
+    rows = list(csv.DictReader(open(tmp_path / ppi_files[0], encoding="utf-8")))
+    assert len(rows) >= 10
+    assert set(rows[0].keys()) == set(phl.PPI_FIELDS)
+    assert rows[0]["label"] == "sim:A" and rows[0]["blocker"] == "1" and rows[1]["blocker"] == "0"
+    assert 700 < int(rows[1]["ppi_ms"]) < 1300
+    # 同一框內 beat_time 遞增，且不晚於 pc_time
+    t = [r["beat_time"] for r in rows[:5]]
+    assert t == sorted(t) and rows[4]["beat_time"] <= rows[4]["pc_time"]

@@ -155,3 +155,15 @@
   已修：`ecg_process.py` 加訊號品質檢查（整段振幅 <6 判 no_signal 不輸出心率；單拍振幅 <4 標 bad；異常 RR >20% 標 poor），
   summary 多 `quality`、`amplitude` 欄；收錄狀態行在 CH1 擺幅 <8 時顯示「(訊號平!)」。測試 25 個全過。
   佩戴中的 2512-03 舊資料重算結果不變（good，振幅 51.3，HR 79.0）。
+
+## 10-12 Polar 逐拍間隔（PPI）串流，供 HRV 用
+- 9P = 0C2D3F30，軟體 2.2.6。PMD 功能清單 `0f 6e 62 …`：支援 PPG、ACC、PPI、GYRO、MAG（沒有 ECG）。
+- `scripts/ppi_test.py`：寫 CP `02 03` 啟動 PPI，資料框 type=3、frame=0、每筆 6 bytes（hr, ppi_ms, err_ms, flags）。
+  第一批約 16 s 後到，之後每 ~5 s 一批 4–5 拍；時間戳為 0。90 s 收到 80 拍，有效 56（70%），平均 1001 ms。
+- 整合進 `polar_hr_logger.DeviceLogger`：連上後讀 PMD 功能、支援才啟動；每顆多一個 `ppi_<編號>_<session>.csv`，
+  `beat_time` 以整批最後一拍結束於到達時刻往回推估（有數秒延遲）。結束時送 `03 03` 停止。
+  `sim_polar` 模擬 PPI（`@noppi` 可關），新增 2 個測試，共 27 個全過。
+- 正式程式對 9P 錄 2 分鐘：心率 115 筆、PPI 118 拍、有效 39（33%）；第二分鐘有效率 0–15%，推測使用者在打字。
+  第一次實驗靜坐時 70%。→ 有效率很吃佩戴與動作，狀態行加顯示有效率。
+- `hrv_summary.py`：ppi / ecgrr 皆可，每 5 分鐘一段算 mean_hr、SDNN、RMSSD、pNN50，只用有效拍，<60 拍留空。
+- 想法：也可改串 PPG 原始波形（type 1）自己找拍，但資料量大 20 倍且仍是光學式；先用 PPI。

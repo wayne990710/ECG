@@ -27,6 +27,11 @@ from bleak.exc import BleakError
 
 HR_UUID = "00002a37-0000-1000-8000-00805f9b34fb"
 BATT_UUID = "00002a19-0000-1000-8000-00805f9b34fb"
+# Polar 私有 PMD 服務：PPI（逐拍脈搏間隔）串流，HRV 要用這個
+PMD_CP_UUID = "fb005c81-02e7-f387-1cad-8acd2d8df0c8"
+PMD_DATA_UUID = "fb005c82-02e7-f387-1cad-8acd2d8df0c8"
+PMD_PPI_TYPE = 3
+PPI_FIELDS = ["pc_time", "beat_time", "device", "label", "ppi_ms", "err_ms", "blocker", "contact", "hr"]
 
 CSV_FIELDS = ["pc_time", "elapsed_s", "device", "label", "hr_bpm", "rr_ms", "contact", "battery"]
 DEVICES_FILE = Path(__file__).with_name("devices.json")
@@ -110,6 +115,20 @@ def parse_hr(data: bytes) -> tuple[int, list[float], int]:
     return hr, rr, (flags >> 1) & 0x03
 
 
+def parse_ppi_frame(data: bytes) -> list[dict]:
+    """PMD 資料框：type(1) timestamp(8) frame_type(1) payload。
+    PPI 每筆 6 bytes：hr(1) ppi_ms(2) err_ms(2) flags(1)；flags bit0 = blocker（此拍不可信）、bit1 = 皮膚接觸。
+    不是 PPI 框就回空列表。"""
+    import struct
+    if len(data) < 10 or data[0] != PMD_PPI_TYPE or data[9] != 0:
+        return []
+    out = []
+    for off in range(10, len(data) - 5, 6):
+        hr, ppi, err, flags = struct.unpack_from("<BHHB", data, off)
+        out.append({"hr": hr, "ppi_ms": ppi, "err_ms": err, "blocker": flags & 1, "contact": (flags >> 1) & 1})
+    return out
+
+
 # ---------------------------------------------------------------- 單顆裝置
 
 class DeviceLogger:
@@ -118,8 +137,9 @@ class DeviceLogger:
     def __init__(self, device_id: str, out_dir: Path, session: str, t0: float,
                  stop: asyncio.Event, battery_interval: float = 300.0,
                  client_factory=None, no_data_warn: float = 15.0,
-                 stale_reconnect: float = 60.0, label: str | None = None):
+                 stale_reconnect: float = 60.0, label: str | None = None, want_ppi: bool = True):
         self.device_id = device_id
+        self.want_ppi = want_ppi
         self.raw_id = device_id.split("@")[0]        # 去掉模擬參數的裝置 ID
         self.label = label or self.raw_id            # 顯示名稱：1P、2P…，沒對照到就是 ID
         self.tag = self.label if self.label == self.raw_id else f"{self.label} {self.raw_id}"
@@ -142,6 +162,12 @@ class DeviceLogger:
         if self._fh.tell() == 0:
             self._w.writeheader()
             self._fh.flush()
+        self.ppi_path = out_dir / f"ppi_{safe}_{session}.csv"
+        self._ppi_fh = None     # 第一次收到 PPI 才建檔，沒有 PPI 的裝置就不會留空檔
+        self._ppi_w = None
+        self.n_ppi = 0
+        self.n_ppi_valid = 0
+        self.ppi_supported: bool | None = None
         self.battery: int | None = None
         self.n_samples = 0
         self.n_disconnects = 0
@@ -180,6 +206,49 @@ class DeviceLogger:
         })
         self._fh.flush()
 
+    def _on_ppi(self, _sender, data: bytearray) -> None:
+        now = time.time()
+        samples = parse_ppi_frame(bytes(data))
+        if not samples:
+            return
+        if self._ppi_fh is None:
+            self._ppi_fh = open(self.ppi_path, "a", newline="", encoding="utf-8")
+            self._ppi_w = csv.DictWriter(self._ppi_fh, fieldnames=PPI_FIELDS)
+            if self._ppi_fh.tell() == 0:
+                self._ppi_w.writeheader()
+        # 裝置不給時間戳；以「整框最後一拍結束於到達時刻」往回推估每拍時間（有數秒延遲，僅供分段用）
+        total = sum(x["ppi_ms"] for x in samples) / 1000.0
+        t = now - total
+        pc = datetime.fromtimestamp(now).isoformat(timespec="milliseconds")
+        for x in samples:
+            t += x["ppi_ms"] / 1000.0
+            self._ppi_w.writerow({"pc_time": pc, "beat_time": datetime.fromtimestamp(t).isoformat(timespec="milliseconds"),
+                                  "device": self.raw_id, "label": self.label, **x})
+            self.n_ppi += 1
+            self.n_ppi_valid += 0 if x["blocker"] else 1
+        self._ppi_fh.flush()
+
+    async def _start_ppi(self, client) -> None:
+        """有 PMD 服務且支援 PPI 就啟動；失敗不影響標準心率收錄。"""
+        try:
+            feat = await client.read_gatt_char(PMD_CP_UUID)
+        except Exception:
+            self.ppi_supported = False
+            return
+        if len(feat) < 2 or not (feat[1] & (1 << PMD_PPI_TYPE)):
+            self.ppi_supported = False
+            log.info("[%s] 此裝置不支援 PPI 串流，只收標準心率", self.tag)
+            return
+        try:
+            await client.start_notify(PMD_CP_UUID, lambda s, d: None)
+            await client.start_notify(PMD_DATA_UUID, self._on_ppi)
+            await client.write_gatt_char(PMD_CP_UUID, bytes([0x02, PMD_PPI_TYPE]), response=True)
+            self.ppi_supported = True
+            log.info("[%s] 已啟動 PPI（逐拍間隔）串流，第一批資料約 20 秒後到", self.tag)
+        except Exception as e:
+            self.ppi_supported = False
+            log.warning("[%s] PPI 啟動失敗：%s（仍收標準心率）", self.tag, e)
+
     def _on_disconnect(self, _client) -> None:
         self._disconnected.set()
 
@@ -213,6 +282,8 @@ class DeviceLogger:
                 backoff = min(backoff * 2, 30.0)
         finally:
             self._fh.close()
+            if self._ppi_fh is not None:
+                self._ppi_fh.close()
 
     async def _find(self):
         if self.is_sim:
@@ -237,6 +308,8 @@ class DeviceLogger:
             log.info("[%s] 已連線（第 %d 次）", self.tag, self.n_connects)
             await self._read_battery(client)
             await client.start_notify(HR_UUID, self._on_hr)
+            if self.want_ppi:
+                await self._start_ppi(client)
             next_batt = time.time() + self.battery_interval
             t_sub = time.time()
             warned_no_data = False
@@ -260,6 +333,8 @@ class DeviceLogger:
                 raise BleakError("裝置斷線")
             if client.is_connected:
                 try:
+                    if self.ppi_supported:
+                        await client.write_gatt_char(PMD_CP_UUID, bytes([0x03, PMD_PPI_TYPE]), response=True)
                     await client.stop_notify(HR_UUID)
                 except BleakError:
                     pass
@@ -400,7 +475,7 @@ async def main_async(args, client_factory=None) -> int:
             parts = []
             for lg in loggers:
                 age = "-" if lg.last_sample is None else f"{time.time() - lg.last_sample:.0f}s前"
-                parts.append(f"{lg.label}: HR={lg.last_hr} n={lg.n_samples} "
+                parts.append(f"{lg.label}: HR={lg.last_hr} n={lg.n_samples} ppi={lg.n_ppi} "
                              f"最近{age} 斷線{lg.n_disconnects} 電{lg.battery}%")
             log.info("狀態 %.0f 分 | %s", (time.time() - t0) / 60, " | ".join(parts))
 
@@ -447,6 +522,9 @@ async def main_async(args, client_factory=None) -> int:
         gs = lg.gap_stats()
         gtxt = "" if not gs else (f"間隔 p50={gs['p50']:.2f}s p99={gs['p99']:.2f}s "
                                   f"max={gs['max']:.1f}s >3s 有 {gs['gaps_over_3s']} 次")
+        if lg.n_ppi:
+            log.info("[%s] PPI 逐拍 %d 筆（有效 %d，%.0f%%）→ %s", lg.tag, lg.n_ppi, lg.n_ppi_valid,
+                     100.0 * lg.n_ppi_valid / lg.n_ppi, lg.ppi_path.name)
         log.info("[%s] 筆數 %d，連線 %d 次，斷線 %d 次，電量 %s%%。%s → %s",
                  lg.tag, lg.n_samples, lg.n_connects, lg.n_disconnects,
                  lg.battery, gtxt, lg.path.name)

@@ -200,7 +200,9 @@ async def main_async(args) -> int:
                 if not d.last_sample or now - d.last_sample > 5:
                     return f"{d.label}:無資料!"
                 batt = f"(電{d.battery}%!)" if d.battery is not None and d.battery <= args.low_battery else ""
-                return f"{d.label}:{d.last_hr}{batt}" + (f"/斷{d.n_disconnects}" if d.n_disconnects else "")
+                ppi = (f"/拍{d.n_ppi}({100 * d.n_ppi_valid // d.n_ppi}%有效)" if d.n_ppi
+                       else ("/無PPI" if d.ppi_supported is False else ""))
+                return f"{d.label}:{d.last_hr}{batt}{ppi}" + (f"/斷{d.n_disconnects}" if d.n_disconnects else "")
 
             missing = [x.label for x in [*patches, *polars] if x.n_connects == 0]
             log.info("狀態 %3.0f 分 | 貼片 %s | 手環HR %s", (now - t0) / 60,
@@ -246,7 +248,8 @@ async def main_async(args) -> int:
                  p.tag, p.n_packets, p.n_bytes / 1e6, p.n_connects, p.n_disconnects, p.max_gap)
     for d in polars:
         gs = d.gap_stats()
-        log.info("[手環 %s] 筆數 %d，連線 %d 次，斷線 %d 次，電量 %s%%%s", d.tag, d.n_samples, d.n_connects,
+        log.info("[手環 %s] 心率 %d 筆，PPI 逐拍 %d 筆（有效 %d），連線 %d 次，斷線 %d 次，電量 %s%%%s", d.tag,
+                 d.n_samples, d.n_ppi, d.n_ppi_valid, d.n_connects,
                  d.n_disconnects, d.battery, f"，>3 s 缺口 {gs['gaps_over_3s']} 次" if gs else "")
     try:
         if polars:

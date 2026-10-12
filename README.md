@@ -141,6 +141,35 @@ uv run python polar_hr_logger.py --auto
 | `battery` | 最近一次讀到的電量 % |
 
 結束時另產生 `data/merged_<session>.csv`：每秒一列、每顆一欄 `hr_<ID>`，`hr_bpm=0` 視為缺值，同一秒多筆取平均。
+
+### 逐拍間隔（PPI）：算 HRV 用
+
+標準心率服務給的是手環平滑過的每秒心率，算不了 HRV。程式會另外用 Polar 私有的 PMD 服務啟動
+**PPI（pulse-to-pulse interval）串流**，每顆手環多一個檔 `data/ppi_<編號>_<session>.csv`：
+
+| 欄位 | 說明 |
+|---|---|
+| `pc_time` | 這一批資料到達電腦的時間（手環每約 5 秒送一批 4–5 拍，第一批約 20 秒後才到） |
+| `beat_time` | 推估的該拍時間：以整批最後一拍結束於 `pc_time` 往回累加。**有數秒延遲，只適合分 5 分鐘段，不要拿來和貼片逐拍對齊** |
+| `ppi_ms` | 這一拍到上一拍的間隔（毫秒），就是 RR 的光學版 |
+| `err_ms` | 手環自估的誤差（毫秒） |
+| `blocker` | **1 = 這一拍不可信**（動作、接觸不良），算 HRV 時要排除 |
+| `contact` | 1 = 偵測到皮膚接觸 |
+| `hr` | 手環當下的心率 |
+
+有效率（`blocker=0` 的比例）很看佩戴與動作：靜坐約 70–85%，打字或走動時可能掉到 30% 以下。
+狀態行會顯示 `9P:63/拍84(40%有效)`，低於 50% 就要注意手環有沒有戴緊。
+手環不支援 PPI 時（例如舊韌體）會印一行提示，仍正常收標準心率，不會產生 ppi 檔。
+
+### 每 5 分鐘的 HRV
+
+```bash
+uv run python hrv_summary.py --session 20261012_100549      # 或 --day 20261012
+```
+
+同時吃手環的 `ppi_*.csv` 與貼片的 `ecgrr_*.csv`，只用有效拍（`blocker=0` / `bad=0`），
+每顆裝置每 5 分鐘一列：`n_beats, n_valid, pct_valid, mean_hr, sdnn_ms, rmssd_ms, pnn50`。
+一段內有效拍少於 60 就留空。輸出 `data/hrv_<session>.csv`。
 事後也可以用：
 
 ```bash

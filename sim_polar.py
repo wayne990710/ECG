@@ -15,6 +15,17 @@ from bleak.exc import BleakError
 
 HR_UUID = "00002a37-0000-1000-8000-00805f9b34fb"
 BATT_UUID = "00002a19-0000-1000-8000-00805f9b34fb"
+PMD_CP = "fb005c81-02e7-f387-1cad-8acd2d8df0c8"
+PMD_DATA = "fb005c82-02e7-f387-1cad-8acd2d8df0c8"
+
+
+def encode_ppi_frame(samples) -> bytes:
+    """組出 PMD PPI 資料框：samples = [(hr, ppi_ms, err_ms, blocker, contact), …]"""
+    import struct
+    body = bytes([3]) + (0).to_bytes(8, "little") + bytes([0])
+    for hr, ppi, err, blocker, contact in samples:
+        body += struct.pack("<BHHB", hr, ppi, err, (blocker & 1) | ((contact & 1) << 1) | 4)
+    return body
 
 
 @dataclass
@@ -59,6 +70,9 @@ class SimClient:
         self._connected = False
         self._task: asyncio.Task | None = None
         self._cb = None
+        self._ppi_cb = None
+        self._ppi_task: asyncio.Task | None = None
+        self.ppi_enabled = "noppi" not in opts
         self._battery = random.randint(60, 100)
         self._phase = random.random() * math.tau
         self._base_hr = random.randint(55, 80)
@@ -84,6 +98,9 @@ class SimClient:
         if self._task:
             self._task.cancel()
             self._task = None
+        if self._ppi_task:
+            self._ppi_task.cancel()
+            self._ppi_task = None
         if self._connected:
             self._connected = False
             if self.disconnected_callback:
@@ -94,13 +111,39 @@ class SimClient:
             raise BleakError("Not connected")
         if uuid == BATT_UUID:
             return bytes([self._battery])
+        if uuid == PMD_CP and self.ppi_enabled:
+            return bytes([0x0F, 0x6E, 0x62] + [0] * 14)     # 真機 2.2.6 回的功能清單（含 PPI）
         raise BleakError(f"未模擬的特徵 {uuid}")
 
     async def start_notify(self, uuid, callback):
+        if uuid == PMD_CP and self.ppi_enabled:
+            return
+        if uuid == PMD_DATA and self.ppi_enabled:
+            self._ppi_cb = callback
+            return
         if uuid != HR_UUID:
             raise BleakError(f"未模擬的特徵 {uuid}")
         self._cb = callback
         self._task = asyncio.create_task(self._emit())
+
+    async def write_gatt_char(self, uuid, data, response=False):
+        if uuid != PMD_CP or not self.ppi_enabled:
+            raise BleakError(f"未模擬的寫入 {uuid}")
+        if bytes(data)[:2] == bytes([0x02, 3]):
+            self._ppi_task = asyncio.create_task(self._emit_ppi())
+        elif bytes(data)[:2] == bytes([0x03, 3]) and self._ppi_task:
+            self._ppi_task.cancel()
+            self._ppi_task = None
+
+    async def _emit_ppi(self):
+        await asyncio.sleep(1.5)        # 真機約 16–20 s 才來第一批；模擬縮短
+        while self._connected:
+            rr = 60000 / self._base_hr
+            samples = [(self._base_hr, int(rr + random.gauss(0, 30)), random.randint(5, 30), 0, 1) for _ in range(5)]
+            samples[0] = (samples[0][0], samples[0][1], 400, 1, 1)   # 每框第 1 筆標 blocker，測有效率統計
+            if self._ppi_cb:
+                self._ppi_cb(None, bytearray(encode_ppi_frame(samples)))
+            await asyncio.sleep(1.0)
 
     async def stop_notify(self, uuid):
         if self._task:
