@@ -19,15 +19,21 @@
   },
   "0C2D1732": {
     "label": "5P",
-    "type": "polar"
+    "type": "polar",
+    "skip": true,
+    "note": "這次名單不使用（要用就把 skip 這行刪掉）"
   },
   "0C2CB23A": {
     "label": "6P",
-    "type": "polar"
+    "type": "polar",
+    "skip": true,
+    "note": "這次名單不使用（要用就把 skip 這行刪掉）"
   },
   "0C2DCB37": {
     "label": "7P",
-    "type": "polar"
+    "type": "polar",
+    "skip": true,
+    "note": "這次名單不使用（要用就把 skip 這行刪掉）"
   },
   "0C2CB139": {
     "label": "8P",
@@ -53,7 +59,9 @@
   },
   "2605-05": {
     "label": "E2605-05",
-    "type": "ecg"
+    "type": "ecg",
+    "skip": true,
+    "note": "這次名單不使用（要用就把 skip 這行刪掉）"
   },
   "2605-04": {
     "label": "E2605-04",
@@ -61,6 +69,20 @@
   },
   "0C2D3F30": {
     "label": "9P",
-    "type": "polar"
+    "type": "polar",
+    "skip": true,
+    "note": "這次名單不使用（要用就把 skip 這行刪掉）"
+  },
+  "2603-09": {
+    "label": "E2603-09",
+    "type": "ecg"
+  },
+  "2512-04": {
+    "label": "E2512-04",
+    "type": "ecg"
+  },
+  "2605-01": {
+    "label": "E2605-01",
+    "type": "ecg"
   }
 }
