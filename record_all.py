@@ -151,6 +151,11 @@ async def main_async(args) -> int:
         for sig in (signal.SIGINT, signal.SIGTERM):
             loop.add_signal_handler(sig, _request_stop)
 
+    # 畫面訊息同時寫進記錄檔，事後才查得到連線失敗的原因（例如另一臺電腦上的視窗已關掉）
+    fh = logging.FileHandler(out_dir / f"log_{session}.txt", encoding="utf-8")
+    fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s", datefmt="%H:%M:%S"))
+    logging.getLogger().addHandler(fh)
+
     labels, _ = load_devices()
     patches = [PatchLogger(p, out_dir, session, t0, stop, labels.get(p.upper()), args.ecg_stale)
                for p in ecg_ids]
